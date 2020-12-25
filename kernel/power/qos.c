@@ -1,4 +1,4 @@
-/*
+ /*
  * This module exposes the interface to kernel space for specifying
  * QoS dependencies.  It provides infrastructure for registration of:
  *
@@ -267,13 +267,21 @@ static const struct file_operations pm_qos_debug_fops = {
 	.release        = single_release,
 };
 
-static inline void pm_qos_set_value_for_cpus(struct pm_qos_constraints *c,
+static inline init pm_qos_set_value_for_cpus(struct pm_qos_constraints *c,
 		struct cpumask *cpus)
 {
 	struct pm_qos_request *req = NULL;
 	int cpu;
 	s32 qos_val[NR_CPUS] = { [0 ... (NR_CPUS - 1)] = c->default_value };
 
+   	/*
+	 * pm_qos_constraints can be from different classes,
+	 * Update cpumask only only for CPU_DMA_LATENCY classes
+	 */
+
+	if (c != pm_qos_array[PM_QOS_CPU_DMA_LATENCY]->constraints)
+		return -EINVAL;
+		
 	plist_for_each_entry(req, &c->list, node) {
 		for_each_cpu(cpu, &req->cpus_affine) {
 			switch (c->type) {
@@ -298,7 +306,7 @@ static inline void pm_qos_set_value_for_cpus(struct pm_qos_constraints *c,
 		if (c->target_per_cpu[cpu] != qos_val[cpu])
 			cpumask_set_cpu(cpu, cpus);
 		c->target_per_cpu[cpu] = qos_val[cpu];
-	}
+	return 0;	
 }
 
 /**
@@ -350,7 +358,7 @@ int pm_qos_update_target(struct pm_qos_constraints *c, struct plist_node *node,
 	curr_value = pm_qos_get_value(c);
 	cpumask_clear(&cpus);
 	pm_qos_set_value(c, curr_value);
-	pm_qos_set_value_for_cpus(c, &cpus);
+	ret = pm_qos_set_value_for_cpus(c, &cpus);
 
 	spin_unlock_irqrestore(&pm_qos_lock, flags);
 
@@ -361,7 +369,8 @@ int pm_qos_update_target(struct pm_qos_constraints *c, struct plist_node *node,
 	 * to update the new qos restriction for the cores
 	 */
 
-	if (!cpumask_empty(&cpus)) {
+	if (!cpumask_empty(&cpus) ||
+	   (ret && prev_value != curr_value)) {
 		ret = 1;
 		if (c->notifiers)
 			blocking_notifier_call_chain(c->notifiers,
@@ -541,7 +550,7 @@ static void pm_qos_irq_release(struct kref *ref)
 }
 
 static void pm_qos_irq_notify(struct irq_affinity_notify *notify,
-		const cpumask_t *unused_mask)
+		const cpumask_t *mask)
 {
 	unsigned long flags;
 	struct pm_qos_request *req = container_of(notify,
@@ -555,14 +564,14 @@ static void pm_qos_irq_notify(struct irq_affinity_notify *notify,
 
 	spin_lock_irqsave(&pm_qos_lock, flags);
 	if (!cpumask_equal(&req->cpus_affine, new_affinity)) {
-		cpumask_copy(&req->cpus_affine, new_affinity);
+	cpumask_copy(&req->cpus_affine, mask);
 		affinity_changed = true;
 	}
 
 	spin_unlock_irqrestore(&pm_qos_lock, flags);
 
 	if (affinity_changed)
-		pm_qos_update_target(c, &req->node, PM_QOS_UPDATE_REQ,
+	pm_qos_update_target(c, &req->node, PM_QOS_UPDATE_REQ, req->node.prio);
 				     req->node.prio);
 }
 #endif
@@ -613,7 +622,7 @@ void pm_qos_add_request(struct pm_qos_request *req,
 			 * won't be set. So fallback to the default affinity.
 			 */
 			mask = irq_data_get_effective_affinity_mask(
-						&desc->irq_data);
+			mask = desc->irq_data.common->affinity;
 			if (cpumask_empty(mask))
 				mask = irq_data_get_affinity_mask(
 						&desc->irq_data);
@@ -908,6 +917,9 @@ static int __init pm_qos_power_init(void)
 
 	BUILD_BUG_ON(ARRAY_SIZE(pm_qos_array) != PM_QOS_NUM_CLASSES);
 
+	/* Don't let userspace impose restrictions on CPU idle levels */
+	return 0;
+	
 	d = debugfs_create_dir("pm_qos", NULL);
 	if (IS_ERR_OR_NULL(d))
 		d = NULL;
