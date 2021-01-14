@@ -439,8 +439,7 @@ static struct ufs_dev_fix ufs_fixups[] = {
 		UFS_DEVICE_QUIRK_HS_G1_TO_HS_G3_SWITCH),
 	UFS_FIX(UFS_VENDOR_SKHYNIX, "hC8HL1",
 		UFS_DEVICE_QUIRK_HS_G1_TO_HS_G3_SWITCH),
-	UFS_FIX(UFS_ANY_VENDOR, UFS_ANY_MODEL,
-		UFS_DEVICE_NO_FASTAUTO),
+
 	END_FIX
 };
 
@@ -761,7 +760,7 @@ static void ufshcd_cmd_log_init(struct ufs_hba *hba)
 {
 }
 
-static void __ufshcd_cmd_log(struct ufs_hba *hba, char *str, char *cmd_type,
+static __maybe_unused void __ufshcd_cmd_log(struct ufs_hba *hba, char *str, char *cmd_type,
 			     unsigned int tag, u8 cmd_id, u8 idn, u8 lun,
 			     sector_t lba, int transfer_len)
 {
@@ -832,9 +831,10 @@ static inline void ufshcd_cond_add_cmd_trace(struct ufs_hba *hba,
 			idn = hba->dev_cmd.query.request.upiu_req.idn;
 		}
 	}
-
+#ifdef CONFIG_SCSI_UFSHCD_CMD_LOGGING
 	__ufshcd_cmd_log(hba, (char *) str, cmd_type, tag, cmd_id, idn,
 			 lrbp->lun, lba, transfer_len);
+#endif
 }
 #else
 static inline void ufshcd_cond_add_cmd_trace(struct ufs_hba *hba,
@@ -2052,6 +2052,26 @@ static void ufshcd_resume_clkscaling(struct ufs_hba *hba)
 		devfreq_resume_device(hba->devfreq);
 }
 
+static int bogus_clkscale_enable = 1;
+static ssize_t ufshcd_bogus_clkscale_enable_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", bogus_clkscale_enable);
+}
+
+static ssize_t ufshcd_bogus_clkscale_enable_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	u32 value;
+
+	if (kstrtou32(buf, 0, &value))
+		return -EINVAL;
+
+	bogus_clkscale_enable = !!value;
+
+	return count;
+}
+
 static ssize_t ufshcd_clkscale_enable_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
@@ -2098,10 +2118,15 @@ out:
 	return count;
 }
 
-static void ufshcd_clkscaling_init_sysfs(struct ufs_hba *hba)
+static void ufshcd_clkscaling_init_sysfs(struct ufs_hba *hba, bool bogus)
 {
-	hba->clk_scaling.enable_attr.show = ufshcd_clkscale_enable_show;
-	hba->clk_scaling.enable_attr.store = ufshcd_clkscale_enable_store;
+	if (bogus) {
+		hba->clk_scaling.enable_attr.show = ufshcd_bogus_clkscale_enable_show;
+		hba->clk_scaling.enable_attr.store = ufshcd_bogus_clkscale_enable_store;
+	} else {
+		hba->clk_scaling.enable_attr.show = ufshcd_clkscale_enable_show;
+		hba->clk_scaling.enable_attr.store = ufshcd_clkscale_enable_store;
+	}
 	sysfs_attr_init(&hba->clk_scaling.enable_attr.attr);
 	hba->clk_scaling.enable_attr.attr.name = "clkscale_enable";
 	hba->clk_scaling.enable_attr.attr.mode = 0644;
@@ -2464,19 +2489,19 @@ static ssize_t ufshcd_clkgate_enable_store(struct device *dev,
 		return -EINVAL;
 
 	value = !!value;
+
+	spin_lock_irqsave(hba->host->host_lock, flags);
 	if (value == hba->clk_gating.is_enabled)
 		goto out;
 
-	if (value) {
+	if (value)
 		ufshcd_release(hba, false);
-	} else {
-		spin_lock_irqsave(hba->host->host_lock, flags);
+	else
 		hba->clk_gating.active_reqs++;
-		spin_unlock_irqrestore(hba->host->host_lock, flags);
-	}
 
 	hba->clk_gating.is_enabled = value;
 out:
+	spin_unlock_irqrestore(hba->host->host_lock, flags);
 	return count;
 }
 
@@ -2519,8 +2544,8 @@ static void ufshcd_init_clk_gating(struct ufs_hba *hba)
 
 	snprintf(wq_name, ARRAY_SIZE(wq_name), "ufs_clk_gating_%d",
 			hba->host->host_no);
-	hba->clk_gating.clk_gating_workq =
-		create_singlethread_workqueue(wq_name);
+	hba->clk_gating.clk_gating_workq = alloc_ordered_workqueue(wq_name,
+					WQ_MEM_RECLAIM | WQ_HIGHPRI);
 
 	gating->is_enabled = true;
 
@@ -10214,7 +10239,10 @@ static int ufshcd_suspend(struct ufs_hba *hba, enum ufs_pm_op pm_op)
 	     ((ufshcd_is_runtime_pm(pm_op) && !hba->auto_bkops_enabled) ||
 	       !ufshcd_is_runtime_pm(pm_op))) {
 		/* ensure that bkops is disabled */
-		ufshcd_disable_auto_bkops(hba);
+		ret = ufshcd_disable_auto_bkops(hba);
+		if (ret)
+			goto enable_gating;
+
 		ret = ufshcd_set_dev_pwr_mode(hba, req_dev_pwr_mode);
 		if (ret)
 			goto enable_gating;
@@ -11087,6 +11115,7 @@ int ufshcd_init(struct ufs_hba *hba, void __iomem *mmio_base, unsigned int irq)
 		hba->is_irq_enabled = true;
 	}
 
+	irq_set_affinity(irq, cpumask_of(1));
 	err = scsi_add_host(host, hba->dev);
 	if (err) {
 		dev_err(hba->dev, "scsi_add_host failed\n");
@@ -11126,7 +11155,9 @@ int ufshcd_init(struct ufs_hba *hba, void __iomem *mmio_base, unsigned int irq)
 			 host->host_no);
 		hba->clk_scaling.workq = create_singlethread_workqueue(wq_name);
 
-		ufshcd_clkscaling_init_sysfs(hba);
+		ufshcd_clkscaling_init_sysfs(hba, false);
+	} else {
+		ufshcd_clkscaling_init_sysfs(hba, true);
 	}
 
 	/*
@@ -11164,6 +11195,8 @@ int ufshcd_init(struct ufs_hba *hba, void __iomem *mmio_base, unsigned int irq)
 	ufsdbg_add_debugfs(hba);
 
 	ufshcd_add_sysfs_nodes(hba);
+
+	device_enable_async_suspend(dev);
 
 	return 0;
 

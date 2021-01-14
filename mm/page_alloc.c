@@ -16,6 +16,7 @@
 
 #include <linux/stddef.h>
 #include <linux/mm.h>
+#include <linux/highmem.h>
 #include <linux/swap.h>
 #include <linux/interrupt.h>
 #include <linux/pagemap.h>
@@ -70,11 +71,15 @@
 #include <linux/nmi.h>
 #include <linux/khugepaged.h>
 #include <linux/psi.h>
+#include <linux/cpu_input_boost.h>
+#include <linux/devfreq_boost.h>
 
 #include <asm/sections.h>
 #include <asm/tlbflush.h>
 #include <asm/div64.h>
 #include "internal.h"
+
+atomic_long_t kswapd_waiters = ATOMIC_LONG_INIT(0);
 
 /* prevent >1 _updater_ of zone percpu pageset ->high and ->batch fields */
 static DEFINE_MUTEX(pcp_batch_high_lock);
@@ -126,7 +131,8 @@ EXPORT_SYMBOL(node_states);
 /* Protect totalram_pages and zone->managed_pages */
 static DEFINE_SPINLOCK(managed_page_count_lock);
 
-unsigned long totalram_pages __read_mostly;
+atomic_long_t _totalram_pages __read_mostly;
+EXPORT_SYMBOL(_totalram_pages);
 unsigned long totalreserve_pages __read_mostly;
 unsigned long totalcma_pages __read_mostly;
 
@@ -1298,7 +1304,7 @@ static void __free_pages_boot_core(struct page *page, unsigned int order)
 	__ClearPageReserved(p);
 	set_page_count(p, 0);
 
-	page_zone(page)->managed_pages += nr_pages;
+	atomic_long_add(nr_pages, &page_zone(page)->managed_pages);
 	set_page_refcounted(page);
 	__free_pages(page, order);
 }
@@ -1820,7 +1826,7 @@ static void prep_new_page(struct page *page, unsigned int order, gfp_t gfp_flags
  * Go through the free lists for the given migratetype and remove
  * the smallest available page from the freelists
  */
-static inline
+static __always_inline
 struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
 						int migratetype)
 {
@@ -1864,7 +1870,7 @@ static int fallbacks[MIGRATE_TYPES][4] = {
 };
 
 #ifdef CONFIG_CMA
-static struct page *__rmqueue_cma_fallback(struct zone *zone,
+static __always_inline struct page *__rmqueue_cma_fallback(struct zone *zone,
 					unsigned int order)
 {
 	return __rmqueue_smallest(zone, order, MIGRATE_CMA);
@@ -1979,8 +1985,7 @@ static void change_pageblock_range(struct page *pageblock_page,
  * is worse than movable allocations stealing from unmovable and reclaimable
  * pageblocks.
  */
-static bool can_steal_fallback(unsigned int order, int start_mt, int fallback_type,
-								unsigned int start_order)
+static bool can_steal_fallback(unsigned int order, int start_mt)
 {
 	/*
 	 * Leaving this order check is intended, although there is
@@ -1992,15 +1997,10 @@ static bool can_steal_fallback(unsigned int order, int start_mt, int fallback_ty
 	if (order >= pageblock_order)
 		return true;
 
-	/* don't let unmovable allocations cause migrations simply because of free pages */
-	if ((start_mt != MIGRATE_UNMOVABLE && order >= pageblock_order / 2) ||
-	/* only steal reclaimable page blocks for unmovable allocations */
-	(start_mt == MIGRATE_UNMOVABLE && fallback_type != MIGRATE_MOVABLE && order >= pageblock_order / 2) ||
-	/* reclaimable can steal aggressively */
-	start_mt == MIGRATE_RECLAIMABLE ||
-	/* allow unmovable allocs up to 64K without migrating blocks */
-	(start_mt == MIGRATE_UNMOVABLE && start_order >= 5) ||
-	page_group_by_mobility_disabled)
+	if (order >= pageblock_order / 2 ||
+		start_mt == MIGRATE_RECLAIMABLE ||
+		start_mt == MIGRATE_UNMOVABLE ||
+		page_group_by_mobility_disabled)
 		return true;
 
 	return false;
@@ -2091,7 +2091,7 @@ single_page:
  * fragmentation due to mixed migratetype pages in one pageblock.
  */
 int find_suitable_fallback(struct free_area *area, unsigned int order,
-			int migratetype, bool only_stealable, bool *can_steal, unsigned int start_order)
+			int migratetype, bool only_stealable, bool *can_steal)
 {
 	int i;
 	int fallback_mt;
@@ -2108,7 +2108,7 @@ int find_suitable_fallback(struct free_area *area, unsigned int order,
 		if (list_empty(&area->free_list[fallback_mt]))
 			continue;
 
-		if (can_steal_fallback(order, migratetype, fallback_mt, start_order))
+		if (can_steal_fallback(order, migratetype))
 			*can_steal = true;
 
 		if (!only_stealable)
@@ -2135,7 +2135,7 @@ static void reserve_highatomic_pageblock(struct page *page, struct zone *zone,
 	 * Limit the number reserved to 1 pageblock or roughly 1% of a zone.
 	 * Check is race-prone but harmless.
 	 */
-	max_managed = (zone->managed_pages / 100) + pageblock_nr_pages;
+	max_managed = (zone_managed_pages(zone) / 100) + pageblock_nr_pages;
 	if (zone->nr_reserved_highatomic >= max_managed)
 		return;
 
@@ -2251,7 +2251,7 @@ static bool unreserve_highatomic_pageblock(const struct alloc_context *ac,
  * deviation from the rest of this file, to make the for loop
  * condition simpler.
  */
-static inline bool
+static __always_inline bool
 __rmqueue_fallback(struct zone *zone, int order, int start_migratetype)
 {
 	struct free_area *area;
@@ -2269,7 +2269,7 @@ __rmqueue_fallback(struct zone *zone, int order, int start_migratetype)
 				--current_order) {
 		area = &(zone->free_area[current_order]);
 		fallback_mt = find_suitable_fallback(area, current_order,
-				start_migratetype, false, &can_steal, order);
+				start_migratetype, false, &can_steal);
 		if (fallback_mt == -1)
 			continue;
 
@@ -2295,7 +2295,7 @@ find_smallest:
 							current_order++) {
 		area = &(zone->free_area[current_order]);
 		fallback_mt = find_suitable_fallback(area, current_order,
-				start_migratetype, false, &can_steal, order);
+				start_migratetype, false, &can_steal);
 		if (fallback_mt != -1)
 			break;
 	}
@@ -2323,8 +2323,8 @@ do_steal:
  * Do the hard work of removing an element from the buddy allocator.
  * Call me with the zone->lock already held.
  */
-static struct page *__rmqueue(struct zone *zone, unsigned int order,
-				int migratetype)
+static __always_inline struct page *
+__rmqueue(struct zone *zone, unsigned int order, int migratetype)
 {
 	struct page *page;
 
@@ -3026,6 +3026,29 @@ static inline bool should_fail_alloc_page(gfp_t gfp_mask, unsigned int order)
 
 #endif /* CONFIG_FAIL_PAGE_ALLOC */
 
+static inline long __zone_watermark_unusable_free(struct zone *z,
+				unsigned int order, unsigned int alloc_flags)
+{
+	const bool alloc_harder = (alloc_flags & (ALLOC_HARDER|ALLOC_OOM));
+	long unusable_free = (1 << order) - 1;
+
+	/*
+	 * If the caller does not have rights to ALLOC_HARDER then subtract
+	 * the high-atomic reserves. This will over-estimate the size of the
+	 * atomic reserve but it avoids a search.
+	 */
+	if (likely(!alloc_harder))
+		unusable_free += z->nr_reserved_highatomic;
+
+#ifdef CONFIG_CMA
+	/* If allocation can't use CMA areas don't use free CMA pages */
+	if (!(alloc_flags & ALLOC_CMA))
+		unusable_free += zone_page_state(z, NR_FREE_CMA_PAGES);
+#endif
+
+	return unusable_free;
+}
+
 /*
  * Return true if free base pages are above 'mark'. For high-order checks it
  * will return true of the order-0 watermark is reached and there is at least
@@ -3041,19 +3064,12 @@ bool __zone_watermark_ok(struct zone *z, unsigned int order, unsigned long mark,
 	const bool alloc_harder = (alloc_flags & (ALLOC_HARDER|ALLOC_OOM));
 
 	/* free_pages may go negative - that's OK */
-	free_pages -= (1 << order) - 1;
+	free_pages -= __zone_watermark_unusable_free(z, order, alloc_flags);
 
 	if (alloc_flags & ALLOC_HIGH)
 		min -= min / 2;
 
-	/*
-	 * If the caller does not have rights to ALLOC_HARDER then subtract
-	 * the high-atomic reserves. This will over-estimate the size of the
-	 * atomic reserve but it avoids a search.
-	 */
-	if (likely(!alloc_harder)) {
-		free_pages -= z->nr_reserved_highatomic;
-	} else {
+	if (unlikely(alloc_harder)) {
 		/*
 		 * OOM victims can try even harder than normal ALLOC_HARDER
 		 * users on the grounds that it's definitely going to be in
@@ -3065,13 +3081,6 @@ bool __zone_watermark_ok(struct zone *z, unsigned int order, unsigned long mark,
 		else
 			min -= min / 4;
 	}
-
-
-#ifdef CONFIG_CMA
-	/* If allocation can't use CMA areas don't use free CMA pages */
-	if (!(alloc_flags & ALLOC_CMA))
-		free_pages -= zone_page_state(z, NR_FREE_CMA_PAGES);
-#endif
 
 	/*
 	 * Check watermarks for an order-0 allocation request. If these
@@ -3129,24 +3138,22 @@ bool zone_watermark_ok(struct zone *z, unsigned int order, unsigned long mark,
 static inline bool zone_watermark_fast(struct zone *z, unsigned int order,
 		unsigned long mark, int classzone_idx, unsigned int alloc_flags)
 {
-	long free_pages = zone_page_state(z, NR_FREE_PAGES);
-	long cma_pages = 0;
+	long free_pages;
 
-#ifdef CONFIG_CMA
-	/* If allocation can't use CMA areas don't use free CMA pages */
-	if (!(alloc_flags & ALLOC_CMA))
-		cma_pages = zone_page_state(z, NR_FREE_CMA_PAGES);
-#endif
+	free_pages = zone_page_state(z, NR_FREE_PAGES);
 
 	/*
 	 * Fast check for order-0 only. If this fails then the reserves
-	 * need to be calculated. There is a corner case where the check
-	 * passes but only the high-order atomic reserve are free. If
-	 * the caller is !atomic then it'll uselessly search the free
-	 * list. That corner case is then slower but it is harmless.
+	 * need to be calculated.
 	 */
-	if (!order && (free_pages - cma_pages) > mark + z->lowmem_reserve[classzone_idx])
-		return true;
+	if (!order) {
+		long fast_free;
+
+		fast_free = free_pages;
+		fast_free -= __zone_watermark_unusable_free(z, 0, alloc_flags);
+		if (fast_free > mark + z->lowmem_reserve[classzone_idx])
+			return true;
+	}
 
 	return __zone_watermark_ok(z, order, mark, classzone_idx, alloc_flags,
 					free_pages);
@@ -3626,6 +3633,12 @@ check_priority:
 		(*compact_priority)--;
 		*compaction_retries = 0;
 		ret = true;
+	} else if (order <= PAGE_ALLOC_COSTLY_ORDER) {
+		/*
+		 * If it's non-alloc-costly order and has enough reclaimable
+		 * memory, retries further to prevent premature OOM kill.
+		 */
+		ret = compaction_zonelist_suitable(ac, order, alloc_flags);
 	}
 out:
 	trace_compact_retry(order, priority, compact_result, retries, max_retries, ret);
@@ -3774,16 +3787,18 @@ retry:
 	return page;
 }
 
-static void wake_all_kswapds(unsigned int order, const struct alloc_context *ac)
+static void wake_all_kswapds(unsigned int order, gfp_t gfp_mask,
+			     const struct alloc_context *ac)
 {
 	struct zoneref *z;
 	struct zone *zone;
 	pg_data_t *last_pgdat = NULL;
+	enum zone_type high_zoneidx = ac->high_zoneidx;
 
-	for_each_zone_zonelist_nodemask(zone, z, ac->zonelist,
-					ac->high_zoneidx, ac->nodemask) {
+	for_each_zone_zonelist_nodemask(zone, z, ac->zonelist, high_zoneidx,
+					ac->nodemask) {
 		if (last_pgdat != zone->zone_pgdat)
-			wakeup_kswapd(zone, order, ac->high_zoneidx);
+			wakeup_kswapd(zone, gfp_mask, order, high_zoneidx);
 		last_pgdat = zone->zone_pgdat;
 	}
 }
@@ -4023,6 +4038,7 @@ __alloc_pages_slowpath(gfp_t gfp_mask, unsigned int order,
 	int no_progress_loops;
 	unsigned int cpuset_mems_cookie;
 	int reserve_flags;
+	bool woke_kswapd = false;
 
 	/*
 	 * We also sanity check to catch abuse of atomic reserves being used by
@@ -4056,8 +4072,13 @@ retry_cpuset:
 	if (!ac->preferred_zoneref->zone)
 		goto nopage;
 
-	if (gfp_mask & __GFP_KSWAPD_RECLAIM)
-		wake_all_kswapds(order, ac);
+	if (gfp_mask & __GFP_KSWAPD_RECLAIM) {
+		if (!woke_kswapd) {
+			atomic_long_inc(&kswapd_waiters);
+			woke_kswapd = true;
+		}
+		wake_all_kswapds(order, gfp_mask, ac);
+	}
 
 	/*
 	 * The adjusted alloc_flags might result in immediate success, so try
@@ -4087,6 +4108,28 @@ retry_cpuset:
 		if (page)
 			goto got_pg;
 
+		 if (order >= pageblock_order && (gfp_mask & __GFP_IO)) {
+			/*
+			 * If allocating entire pageblock(s) and compaction
+			 * failed because all zones are below low watermarks
+			 * or is prohibited because it recently failed at this
+			 * order, fail immediately.
+			 *
+			 * Reclaim is
+			 *  - potentially very expensive because zones are far
+			 *    below their low watermarks or this is part of very
+			 *    bursty high order allocations,
+			 *  - not guaranteed to help because isolate_freepages()
+			 *    may not iterate over freed pages as part of its
+			 *    linear scan, and
+			 *  - unlikely to make entire pageblocks free on its
+			 *    own.
+			 */
+			if (compact_result == COMPACT_SKIPPED ||
+			    compact_result == COMPACT_DEFERRED)
+				goto nopage;
+		}
+
 		/*
 		 * Checks for costly allocations with __GFP_NORETRY, which
 		 * includes THP page fault allocations
@@ -4115,7 +4158,7 @@ retry_cpuset:
 retry:
 	/* Ensure kswapd doesn't accidentally go to sleep as long as we loop */
 	if (gfp_mask & __GFP_KSWAPD_RECLAIM)
-		wake_all_kswapds(order, ac);
+		wake_all_kswapds(order, gfp_mask, ac);
 
 	reserve_flags = __gfp_pfmemalloc_flags(gfp_mask);
 	if (reserve_flags)
@@ -4144,8 +4187,11 @@ retry:
 	if (current->flags & PF_MEMALLOC)
 		goto nopage;
 
-	if (fatal_signal_pending(current) && !(gfp_mask & __GFP_NOFAIL))
+	if (fatal_signal_pending(current) && !(gfp_mask & __GFP_NOFAIL) &&
+			(gfp_mask & __GFP_FS)) {
+		gfp_mask |= __GFP_NOWARN;
 		goto nopage;
+	}
 
 	/* Try direct reclaim and then allocating */
 	page = __alloc_pages_direct_reclaim(gfp_mask, order, alloc_flags, ac,
@@ -4169,6 +4215,12 @@ retry:
 	 */
 	if (costly_order && !(gfp_mask & __GFP_RETRY_MAYFAIL))
 		goto nopage;
+
+	/* Boost when memory is low so allocation latency doesn't get too bad */
+	cpu_input_boost_kick_max(100);
+	devfreq_boost_kick_max(DEVFREQ_MSM_LLCCBW, 100);
+	devfreq_boost_kick_max(DEVFREQ_MSM_CPUBW, 100);
+	pr_info_ratelimited("%s: boosting\n", __func__);
 
 	if (should_reclaim_retry(gfp_mask, order, ac, alloc_flags,
 				 did_some_progress > 0, &no_progress_loops))
@@ -4254,9 +4306,12 @@ nopage:
 		goto retry;
 	}
 fail:
-	warn_alloc(gfp_mask, ac->nodemask,
-			"page allocation failure: order:%u", order);
 got_pg:
+	if (woke_kswapd)
+		atomic_long_dec(&kswapd_waiters);
+	if (!page)
+		warn_alloc(gfp_mask, ac->nodemask,
+				"page allocation failure: order:%u", order);
 	return page;
 }
 
@@ -4529,8 +4584,14 @@ void page_frag_free(void *addr)
 {
 	struct page *page = virt_to_head_page(addr);
 
-	if (unlikely(put_page_testzero(page)))
-		__free_pages_ok(page, compound_order(page));
+	if (unlikely(put_page_testzero(page))) {
+		unsigned int order = compound_order(page);
+
+		if (order == 0)		/* Via pcp? */
+			free_hot_cold_page(page, false);
+		else
+			__free_pages_ok(page, order);
+	}
 }
 EXPORT_SYMBOL(page_frag_free);
 
@@ -4632,7 +4693,7 @@ static unsigned long nr_free_zone_pages(int offset)
 	struct zonelist *zonelist = node_zonelist(numa_node_id(), GFP_KERNEL);
 
 	for_each_zone_zonelist(zone, z, zonelist, offset) {
-		unsigned long size = zone->managed_pages;
+		unsigned long size = zone_managed_pages(zone);
 		unsigned long high = high_wmark_pages(zone);
 		if (size > high)
 			sum += size - high;
@@ -4676,6 +4737,7 @@ long si_mem_available(void)
 	unsigned long pagecache;
 	unsigned long wmark_low = 0;
 	unsigned long pages[NR_LRU_LISTS];
+	unsigned long reclaimable;
 	struct zone *zone;
 	int lru;
 
@@ -4701,19 +4763,13 @@ long si_mem_available(void)
 	available += pagecache;
 
 	/*
-	 * Part of the reclaimable slab consists of items that are in use,
-	 * and cannot be freed. Cap this estimate at the low watermark.
+	 * Part of the reclaimable slab and other kernel memory consists of
+	 * items that are in use, and cannot be freed. Cap this estimate at the
+	 * low watermark.
 	 */
-	available += global_node_page_state(NR_SLAB_RECLAIMABLE) -
-		     min(global_node_page_state(NR_SLAB_RECLAIMABLE) / 2,
-			 wmark_low);
-
-	/*
-	 * Part of the kernel memory, which can be released under memory
-	 * pressure.
-	 */
-	available += global_node_page_state(NR_INDIRECTLY_RECLAIMABLE_BYTES) >>
-		PAGE_SHIFT;
+	reclaimable = global_node_page_state(NR_SLAB_RECLAIMABLE) +
+			global_node_page_state(NR_KERNEL_MISC_RECLAIMABLE);
+	available += reclaimable - min(reclaimable / 2, wmark_low);
 
 	if (available < 0)
 		available = 0;
@@ -4723,11 +4779,11 @@ EXPORT_SYMBOL_GPL(si_mem_available);
 
 void si_meminfo(struct sysinfo *val)
 {
-	val->totalram = totalram_pages;
+	val->totalram = totalram_pages();
 	val->sharedram = global_node_page_state(NR_SHMEM);
 	val->freeram = global_zone_page_state(NR_FREE_PAGES);
 	val->bufferram = nr_blockdev_pages();
-	val->totalhigh = totalhigh_pages;
+	val->totalhigh = totalhigh_pages();
 	val->freehigh = nr_free_highpages();
 	val->mem_unit = PAGE_SIZE;
 }
@@ -4744,7 +4800,7 @@ void si_meminfo_node(struct sysinfo *val, int nid)
 	pg_data_t *pgdat = NODE_DATA(nid);
 
 	for (zone_type = 0; zone_type < MAX_NR_ZONES; zone_type++)
-		managed_pages += pgdat->node_zones[zone_type].managed_pages;
+		managed_pages += zone_managed_pages(&pgdat->node_zones[zone_type]);
 	val->totalram = managed_pages;
 	val->sharedram = node_page_state(pgdat, NR_SHMEM);
 	val->freeram = sum_zone_node_page_state(nid, NR_FREE_PAGES);
@@ -4753,7 +4809,7 @@ void si_meminfo_node(struct sysinfo *val, int nid)
 		struct zone *zone = &pgdat->node_zones[zone_type];
 
 		if (is_highmem(zone)) {
-			managed_highpages += zone->managed_pages;
+			managed_highpages += zone_managed_pages(zone);
 			free_highpages += zone_page_state(zone, NR_FREE_PAGES);
 		}
 	}
@@ -4963,7 +5019,7 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 			K(zone_page_state(zone, NR_ZONE_UNEVICTABLE)),
 			K(zone_page_state(zone, NR_ZONE_WRITE_PENDING)),
 			K(zone->present_pages),
-			K(zone->managed_pages),
+			K(zone_managed_pages(zone)),
 			K(zone_page_state(zone, NR_MLOCK)),
 			zone_page_state(zone, NR_KERNEL_STACK_KB),
 #ifdef CONFIG_SHADOW_CALL_STACK
@@ -5540,13 +5596,12 @@ static int zone_batchsize(struct zone *zone)
 
 	/*
 	 * The per-cpu-pages pools are set to around 1000th of the
-	 * size of the zone.  But no more than 1/2 of a meg.
-	 *
-	 * OK, so we don't know how big the cache is.  So guess.
+	 * size of the zone.
 	 */
-	batch = zone->managed_pages / 1024;
-	if (batch * PAGE_SIZE > 512 * 1024)
-		batch = (512 * 1024) / PAGE_SIZE;
+	batch = zone_managed_pages(zone) / 1024;
+	/* But no more than a meg. */
+	if (batch * PAGE_SIZE > 1024 * 1024)
+		batch = (1024 * 1024) / PAGE_SIZE;
 	batch /= 4;		/* We effectively *= 4 below */
 	if (batch < 1)
 		batch = 1;
@@ -5654,7 +5709,7 @@ static void pageset_set_high_and_batch(struct zone *zone,
 {
 	if (percpu_pagelist_fraction)
 		pageset_set_high(pcp,
-			(zone->managed_pages /
+			(zone_managed_pages(zone) /
 				percpu_pagelist_fraction));
 	else
 		pageset_set_batch(pcp, zone_batchsize(zone));
@@ -6255,7 +6310,7 @@ static void __paginginit free_area_init_core(struct pglist_data *pgdat)
 		 * when the bootmem allocator frees pages into the buddy system.
 		 * And all highmem pages will be managed by the buddy system.
 		 */
-		zone->managed_pages = is_highmem_idx(j) ? realsize : freesize;
+		atomic_long_set(&zone->managed_pages, is_highmem_idx(j) ? realsize : freesize);
 #ifdef CONFIG_NUMA
 		zone->node = nid;
 #endif
@@ -6828,11 +6883,11 @@ early_param("movablecore", cmdline_parse_movablecore);
 void adjust_managed_page_count(struct page *page, long count)
 {
 	spin_lock(&managed_page_count_lock);
-	page_zone(page)->managed_pages += count;
-	totalram_pages += count;
+	atomic_long_add(count, &page_zone(page)->managed_pages);
+	totalram_pages_add(count);
 #ifdef CONFIG_HIGHMEM
 	if (PageHighMem(page))
-		totalhigh_pages += count;
+		totalhigh_pages_add(count);
 #endif
 	spin_unlock(&managed_page_count_lock);
 }
@@ -6863,9 +6918,9 @@ EXPORT_SYMBOL(free_reserved_area);
 void free_highmem_page(struct page *page)
 {
 	__free_reserved_page(page);
-	totalram_pages++;
-	page_zone(page)->managed_pages++;
-	totalhigh_pages++;
+	totalram_pages_inc();
+	atomic_long_inc(&page_zone(page)->managed_pages);
+	totalhigh_pages_inc();
 }
 #endif
 
@@ -6914,10 +6969,10 @@ void __init mem_init_print_info(const char *str)
 		physpages << (PAGE_SHIFT - 10),
 		codesize >> 10, datasize >> 10, rosize >> 10,
 		(init_data_size + init_code_size) >> 10, bss_size >> 10,
-		(physpages - totalram_pages - totalcma_pages) << (PAGE_SHIFT - 10),
+		(physpages - totalram_pages() - totalcma_pages) << (PAGE_SHIFT - 10),
 		totalcma_pages << (PAGE_SHIFT - 10),
 #ifdef	CONFIG_HIGHMEM
-		totalhigh_pages << (PAGE_SHIFT - 10),
+		totalhigh_pages() << (PAGE_SHIFT - 10),
 #endif
 		str ? ", " : "", str ? str : "");
 }
@@ -6996,6 +7051,7 @@ static void calculate_totalreserve_pages(void)
 		for (i = 0; i < MAX_NR_ZONES; i++) {
 			struct zone *zone = pgdat->node_zones + i;
 			long max = 0;
+			unsigned long managed_pages = zone_managed_pages(zone);
 
 			/* Find valid and maximum lowmem_reserve in the zone */
 			for (j = i; j < MAX_NR_ZONES; j++) {
@@ -7006,8 +7062,8 @@ static void calculate_totalreserve_pages(void)
 			/* we treat the high watermark as reserved pages. */
 			max += high_wmark_pages(zone);
 
-			if (max > zone->managed_pages)
-				max = zone->managed_pages;
+			if (max > managed_pages)
+				max = managed_pages;
 
 			pgdat->totalreserve_pages += max;
 
@@ -7031,7 +7087,7 @@ static void setup_per_zone_lowmem_reserve(void)
 	for_each_online_pgdat(pgdat) {
 		for (j = 0; j < MAX_NR_ZONES; j++) {
 			struct zone *zone = pgdat->node_zones + j;
-			unsigned long managed_pages = zone->managed_pages;
+			unsigned long managed_pages = zone_managed_pages(zone);
 
 			zone->lowmem_reserve[j] = 0;
 
@@ -7047,7 +7103,7 @@ static void setup_per_zone_lowmem_reserve(void)
 				lower_zone = pgdat->node_zones + idx;
 				lower_zone->lowmem_reserve[j] = managed_pages /
 					sysctl_lowmem_reserve_ratio[idx];
-				managed_pages += lower_zone->managed_pages;
+				managed_pages += zone_managed_pages(lower_zone);
 			}
 		}
 	}
@@ -7067,16 +7123,16 @@ static void __setup_per_zone_wmarks(void)
 	/* Calculate total number of !ZONE_HIGHMEM pages */
 	for_each_zone(zone) {
 		if (!is_highmem(zone))
-			lowmem_pages += zone->managed_pages;
+			lowmem_pages += zone_managed_pages(zone);
 	}
 
 	for_each_zone(zone) {
 		u64 min, low;
 
 		spin_lock_irqsave(&zone->lock, flags);
-		min = (u64)pages_min * zone->managed_pages;
+		min = (u64)pages_min * zone_managed_pages(zone);
 		do_div(min, lowmem_pages);
-		low = (u64)pages_low * zone->managed_pages;
+		low = (u64)pages_low * zone_managed_pages(zone);
 		do_div(low, vm_total_pages);
 
 		if (is_highmem(zone)) {
@@ -7091,7 +7147,7 @@ static void __setup_per_zone_wmarks(void)
 			 */
 			unsigned long min_pages;
 
-			min_pages = zone->managed_pages / 1024;
+			min_pages = zone_managed_pages(zone) / 1024;
 			min_pages = clamp(min_pages, SWAP_CLUSTER_MAX, 128UL);
 			zone->watermark[WMARK_MIN] = min_pages;
 		} else {
@@ -7108,7 +7164,7 @@ static void __setup_per_zone_wmarks(void)
 		 * ensure a minimum size on small systems.
 		 */
 		min = max_t(u64, min >> 2,
-			    mult_frac(zone->managed_pages,
+			    mult_frac(zone_managed_pages(zone),
 				      watermark_scale_factor, 10000));
 
 		zone->watermark[WMARK_LOW]  = min_wmark_pages(zone) +
@@ -7242,8 +7298,8 @@ static void setup_min_unmapped_ratio(void)
 		pgdat->min_unmapped_pages = 0;
 
 	for_each_zone(zone)
-		zone->zone_pgdat->min_unmapped_pages += (zone->managed_pages *
-				sysctl_min_unmapped_ratio) / 100;
+		zone->zone_pgdat->min_unmapped_pages += (zone_managed_pages(zone) *
+						         sysctl_min_unmapped_ratio) / 100;
 }
 
 
@@ -7270,8 +7326,8 @@ static void setup_min_slab_ratio(void)
 		pgdat->min_slab_pages = 0;
 
 	for_each_zone(zone)
-		zone->zone_pgdat->min_slab_pages += (zone->managed_pages *
-				sysctl_min_slab_ratio) / 100;
+		zone->zone_pgdat->min_slab_pages += (zone_managed_pages(zone) *
+						     sysctl_min_slab_ratio) / 100;
 }
 
 int sysctl_min_slab_ratio_sysctl_handler(struct ctl_table *table, int write,

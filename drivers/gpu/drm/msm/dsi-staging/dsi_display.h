@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2015-2020, The Linux Foundation.All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+ *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
  * only version 2 as published by the Free Software Foundation.
@@ -179,7 +179,6 @@ struct dsi_display_ext_bridge {
  * @cmdline_topology: Display topology shared from kernel command line.
  * @cmdline_timing:   Display timing shared from kernel command line.
  * @is_tpg_enabled:   TPG state.
- * @poms_pending;      Flag indicating the pending panel operating mode switch.
  * @ulps_enabled:     ulps state.
  * @clamp_enabled:    clamp state.
  * @phy_idle_power_off:   PHY power state.
@@ -242,7 +241,6 @@ struct dsi_display {
 	int cmdline_topology;
 	int cmdline_timing;
 	bool is_tpg_enabled;
-	bool poms_pending;
 	bool ulps_enabled;
 	bool clamp_enabled;
 	bool phy_idle_power_off;
@@ -284,7 +282,7 @@ struct dsi_display {
 	u32 te_source;
 };
 
-static struct dsi_display *whitep_display;
+static __maybe_unused struct dsi_display *whitep_display;
 
 //Update /proc/tp_info & /proc/tp_lockdown_info node
 extern void update_lct_tp_info(char *tp_info_buf, char *tp_lockdown_info_buf);
@@ -382,7 +380,7 @@ int dsi_display_get_mode_count(struct dsi_display *display, u32 *count);
  * dsi_display_get_modes() - get modes supported by display
  * @display:            Handle to display.
  * @modes;              Output param, list of DSI modes. Number of modes matches
- *                      count got from display->panel->num_display_modes;
+ *                      count returned by dsi_display_get_mode_count
  *
  * Return: error code.
  */
@@ -720,5 +718,5 @@ int dsi_display_cont_splash_config(void *display);
 int dsi_display_get_panel_vfp(void *display,
 	int h_active, int v_active);
 
-int dsi_panel_set_feature(struct dsi_panel *panel, enum dsi_cmd_set_type type);
+int dsi_panel_set_feature(struct dsi_panel *panel,enum dsi_cmd_set_type type);
 #endif /* _DSI_DISPLAY_H_ */

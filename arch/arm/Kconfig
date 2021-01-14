@@ -191,10 +191,6 @@ config TRACE_IRQFLAGS_SUPPORT
 	bool
 	default !CPU_V7M
 
-config RWSEM_XCHGADD_ALGORITHM
-	bool
-	default y
-
 config ARCH_HAS_ILOG2_U32
 	bool
 
@@ -2147,6 +2143,17 @@ config AUTO_ZRELADDR
 
 config EFI_STUB
 	bool
+
+config ARM_DECOMPRESSOR_LIMIT
+        hex "Limit the decompressor memory area"
+        default 0x3200000
+        help
+          Allows overriding of the memory size that decompressor maps with
+          read, write and execute permissions to avoid speculative prefetch.
+
+          By default ARM_DECOMPRESSOR_LIMIT maps first 1GB of memory
+          with read, write and execute permissions and reset of the memory
+          as strongly ordered.
 
 config EFI
 	bool "UEFI runtime support"

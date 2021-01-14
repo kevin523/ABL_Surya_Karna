@@ -67,10 +67,12 @@ static struct hlist_head *all_lists[] = {
 	NULL,
 };
 
+#ifdef CONFIG_DEBUG_FS
 static struct hlist_head *orphan_list[] = {
 	&clk_orphan_list,
 	NULL,
 };
+#endif
 
 /***    private data structures    ***/
 
@@ -1251,10 +1253,14 @@ unsigned long clk_hw_round_rate(struct clk_hw *hw, unsigned long rate)
 	int ret;
 	struct clk_rate_request req;
 
+	clk_prepare_lock();
+
 	clk_core_get_boundaries(hw->core, &req.min_rate, &req.max_rate);
 	req.rate = rate;
 
 	ret = clk_core_round_rate_nolock(hw->core, &req);
+	clk_prepare_unlock();
+
 	if (ret)
 		return 0;
 

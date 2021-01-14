@@ -93,11 +93,11 @@ struct tsens_device;
 		}	\
 	} while (0)
 #else
-#define	TSENS_DBG1(x...)		pr_debug(x)
-#define	TSENS_DBG(x...)		pr_debug(x)
-#define	TSENS_INFO(x...)		pr_info(x)
-#define	TSENS_ERR(x...)		pr_err(x)
-#define	TSENS_DUMP(x...)		pr_info(x)
+#define	TSENS_DBG1(x...)	{ }
+#define	TSENS_DBG(x...)		{ }
+#define	TSENS_INFO(x...)	{ }
+#define	TSENS_ERR(x...)		{ }
+#define	TSENS_DUMP(x...)	{ }
 #endif
 
 #if defined(CONFIG_THERMAL_TSENS)
@@ -217,6 +217,7 @@ struct tsens_device {
 	struct workqueue_struct		*tsens_reinit_work;
 	struct work_struct		therm_fwk_notify;
 	bool				tsens_reinit_wa;
+	int				tsens_reinit_cnt;
 	struct tsens_sensor		sensor[0];
 };
 

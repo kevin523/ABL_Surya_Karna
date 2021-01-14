@@ -1,7 +1,6 @@
 /*
  * Copyright (c) 2016  xiaomi Inc.
- * Copyright (C) 2020 XiaoMi, Inc.
-*/
+ */
 #define pr_fmt(fmt)	"[Onewire] %s: " fmt, __func__
 
 #include <linux/slab.h> /* kfree() */
@@ -22,10 +21,10 @@
 #include <linux/device.h>
 #include <linux/spinlock.h>
 
-#define ow_info	pr_err
-#define ow_dbg	pr_err
+#define ow_info	pr_debug
+#define ow_dbg	pr_debug
 #define ow_err	pr_err
-#define ow_log	pr_err
+#define ow_log	pr_debug
 
 #define DRV_STRENGTH_16MA		(0x7 << 6)
 #define DRV_STRENGTH_12MA		(0x5 << 6)
@@ -460,8 +459,12 @@ static int onewire_gpio_probe(struct platform_device *pdev)
 					(uint32_t)onewire_data->onewire_gpio_level_addr, 0x4);
 	onewire_data->gpio_cfg_reg = devm_ioremap(&pdev->dev,
 					(uint32_t)onewire_data->onewire_gpio_cfg_addr, 0x4);
-	ow_log("onewire_gpio_level_addr is %x; onewire_gpio_cfg_addr is %x", (uint32_t)(onewire_data->onewire_gpio_level_addr), (uint32_t)(onewire_data->onewire_gpio_cfg_addr));
-	ow_log("onewire_data->gpio_cfg_reg is %x; onewire_data->gpio_in_out_reg is %x", (uint32_t)(onewire_data->gpio_cfg_reg), (uint32_t)(onewire_data->gpio_in_out_reg));
+	ow_log("onewire_gpio_level_addr is %x; onewire_gpio_cfg_addr is %x",
+		   (long)(onewire_data->onewire_gpio_level_addr),
+		   (long)(onewire_data->onewire_gpio_cfg_addr));
+	ow_log("onewire_data->gpio_cfg_reg is %x; onewire_data->gpio_in_out_reg is %x",
+		   (long)(onewire_data->gpio_cfg_reg),
+		   (long)(onewire_data->gpio_in_out_reg));
 
 	// create device node
 	onewire_data->dev = device_create(onewire_class,
@@ -541,6 +544,7 @@ static const struct file_operations onewire_dev_fops = {
 
 static const struct of_device_id onewire_gpio_dt_match[] = {
 	{.compatible = "xiaomi,onewire_gpio"},
+	{},
 };
 
 static struct platform_driver onewire_gpio_driver = {

@@ -88,7 +88,7 @@
 #include <linux/io.h>
 #include <linux/cache.h>
 #include <linux/rodata_test.h>
-#include <linux/scs.h>
+#include <linux/jump_label.h>
 
 #include <asm/io.h>
 #include <asm/bugs.h>
@@ -518,10 +518,9 @@ asmlinkage __visible void __init start_kernel(void)
 	char *command_line;
 	char *after_dashes;
 	char *p=NULL;
+	const int max_print_length = 900;
 
 	set_task_stack_end_magic(&init_task);
-	scs_set_init_magic(&init_task);
-
 	smp_setup_processor_id();
 	debug_objects_early_init();
 
@@ -555,7 +554,24 @@ asmlinkage __visible void __init start_kernel(void)
 	build_all_zonelists(NULL);
 	page_alloc_init();
 
-	pr_notice("Kernel command line: %s\n", boot_command_line);
+	if (strlen(boot_command_line) > max_print_length) {
+		char buf[max_print_length + 2];
+		int len;
+		/* Copy first 902 bytes of cmdline */
+		snprintf(buf, max_print_length, "%s", boot_command_line);
+		/* Calc how many long the last truncated argument is */
+		len = strlen(strrchr(buf, ' '));
+		/* Copy first buf minus truncated and print */
+		snprintf(buf, max_print_length - len, "%s", boot_command_line);
+		pr_notice("Kernel command line pt1: %s\n", buf);
+		/* Copy the rest and print (+1 to remove the space from strrchr) */
+		snprintf(buf, max_print_length, "%s", boot_command_line + strlen(buf) + 1);
+		pr_notice("pt2: %s\n", buf);
+	} else
+		pr_notice("Kernel command line: %s\n", boot_command_line);
+
+	/* parameters may set static keys */
+	jump_label_init();
 
 	p = NULL;
 	p= strnstr(command_line, "androidboot.fpsensor=fpc", strlen(command_line));
@@ -703,6 +719,7 @@ asmlinkage __visible void __init start_kernel(void)
 	vfs_caches_init();
 	pagecache_init();
 	signals_init();
+	seq_file_init();
 	proc_root_init();
 	nsfs_init();
 	cpuset_init();
@@ -815,13 +832,13 @@ static int __init_or_module do_one_initcall_debug(initcall_t fn)
 	unsigned long long duration;
 	int ret;
 
-	printk(KERN_DEBUG "calling  %pF @ %i\n", fn, task_pid_nr(current));
+	pr_info("calling  %pF @ %i\n", fn, task_pid_nr(current));
 	calltime = ktime_get();
 	ret = fn();
 	rettime = ktime_get();
 	delta = ktime_sub(rettime, calltime);
 	duration = (unsigned long long) ktime_to_ns(delta) >> 10;
-	printk(KERN_DEBUG "initcall %pF returned %d after %lld usecs\n",
+	pr_info("initcall %pF returned %d after %lld usecs\n",
 		 fn, ret, duration);
 
 	return ret;
@@ -912,8 +929,11 @@ static void __init do_initcalls(void)
 {
 	int level;
 
-	for (level = 0; level < ARRAY_SIZE(initcall_levels) - 1; level++)
+	for (level = 0; level < ARRAY_SIZE(initcall_levels) - 1; level++) {
 		do_initcall_level(level);
+		/* finish all async calls before going into next level */
+		async_synchronize_full();
+	}
 }
 
 /*

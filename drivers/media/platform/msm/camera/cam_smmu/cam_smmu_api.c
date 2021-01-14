@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -410,8 +410,9 @@ end:
 	if (closest_mapping) {
 		buf_handle = GET_MEM_HANDLE(idx, closest_mapping->ion_fd);
 		CAM_INFO(CAM_SMMU,
-			"Closest map fd %d 0x%lx 0x%lx-0x%lx buf=%pK mem %0x",
+			"Closest map fd %d 0x%lx %llu-%llu 0x%lx-0x%lx buf=%pK mem %0x",
 			closest_mapping->ion_fd, current_addr,
+			mapping->len, closest_mapping->len,
 			(unsigned long)closest_mapping->paddr,
 			(unsigned long)closest_mapping->paddr + mapping->len,
 			closest_mapping->buf,
@@ -2479,14 +2480,13 @@ static int cam_smmu_map_stage2_buffer_and_add_to_list(int idx, int ion_fd,
 	/* add to the list */
 	list_add(&mapping_info->list, &iommu_cb_set.cb_info[idx].smmu_buf_list);
 
-	return 0;
-
 err_unmap_sg:
 	dma_buf_unmap_attachment(attach, table, dma_dir);
 err_detach:
 	dma_buf_detach(dmabuf, attach);
 err_put:
-	dma_buf_put(dmabuf);
+	if (rc)
+		dma_buf_put(dmabuf);
 err_out:
 	return rc;
 }

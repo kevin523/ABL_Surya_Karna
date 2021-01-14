@@ -1,5 +1,5 @@
-/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+/* Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+ *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
  * only version 2 as published by the Free Software Foundation.
@@ -1464,9 +1464,8 @@ static int gmu_probe(struct kgsl_device *device, struct device_node *node)
 				"ACD probe failed: missing or invalid table\n");
 	}
 
-	/* disable LM if the feature is not enabled */
-	if (!ADRENO_FEATURE(adreno_dev, ADRENO_LM))
-		clear_bit(ADRENO_LM_CTRL, &adreno_dev->pwrctrl_flag);
+	if (ADRENO_FEATURE(adreno_dev, ADRENO_LM))
+		set_bit(ADRENO_LM_CTRL, &adreno_dev->pwrctrl_flag);
 
 	set_bit(GMU_ENABLED, &device->gmu_core.flags);
 	device->gmu_core.dev_ops = &adreno_a6xx_gmudev;
@@ -1651,7 +1650,7 @@ static int gmu_start(struct kgsl_device *device)
 
 		/* Vote for 300MHz DDR for GMU to init */
 		ret = msm_bus_scale_client_update_request(gmu->pcl,
-				pwr->pwrlevels[pwr->default_pwrlevel].bus_freq);
+				pwr->pwrlevels[pwr->num_pwrlevels - 1].bus_freq);
 		if (ret)
 			dev_err(&gmu->pdev->dev,
 				"Failed to allocate gmu b/w: %d\n", ret);

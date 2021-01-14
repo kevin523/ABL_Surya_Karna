@@ -91,8 +91,8 @@
 #include <linux/livepatch.h>
 #include <linux/thread_info.h>
 #include <linux/cpufreq_times.h>
-#include <linux/simple_lmk.h>
 #include <linux/scs.h>
+#include <linux/simple_lmk.h>
 
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>
@@ -435,15 +435,16 @@ void __init __weak arch_task_cache_init(void) { }
 static void set_max_threads(unsigned int max_threads_suggested)
 {
 	u64 threads;
+	unsigned long nr_pages = totalram_pages();
 
 	/*
 	 * The number of threads shall be limited such that the thread
 	 * structures may only consume a small part of the available memory.
 	 */
-	if (fls64(totalram_pages) + fls64(PAGE_SIZE) > 64)
+	if (fls64(nr_pages) + fls64(PAGE_SIZE) > 64)
 		threads = MAX_THREADS;
 	else
-		threads = div64_u64((u64) totalram_pages * (u64) PAGE_SIZE,
+		threads = div64_u64((u64) nr_pages * (u64) PAGE_SIZE,
 				    (u64) THREAD_SIZE * 8UL);
 
 	if (threads > max_threads_suggested)
@@ -548,6 +549,10 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 	if (err)
 		goto free_stack;
 
+	err = scs_prepare(tsk, node);
+	if (err)
+		goto free_stack;
+
 #ifdef CONFIG_SECCOMP
 	/*
 	 * We must handle setting up seccomp filters once we're under
@@ -562,7 +567,6 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 	clear_user_return_notifier(tsk);
 	clear_tsk_need_resched(tsk);
 	set_task_stack_end_magic(tsk);
-	scs_task_init(tsk);
 
 #ifdef CONFIG_CC_STACKPROTECTOR
 	tsk->stack_canary = get_random_canary();
@@ -831,8 +835,7 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p,
 	init_rwsem(&mm->mmap_sem);
 	INIT_LIST_HEAD(&mm->mmlist);
 	mm->core_state = NULL;
-	atomic_long_set(&mm->nr_ptes, 0);
-	mm_nr_pmds_init(mm);
+	mm_pgtables_bytes_init(mm);
 	mm->map_count = 0;
 	mm->locked_vm = 0;
 	mm->pinned_vm = 0;
@@ -893,12 +896,9 @@ static void check_mm(struct mm_struct *mm)
 					  "mm:%p idx:%d val:%ld\n", mm, i, x);
 	}
 
-	if (atomic_long_read(&mm->nr_ptes))
-		pr_alert("BUG: non-zero nr_ptes on freeing mm: %ld\n",
-				atomic_long_read(&mm->nr_ptes));
-	if (mm_nr_pmds(mm))
-		pr_alert("BUG: non-zero nr_pmds on freeing mm: %ld\n",
-				mm_nr_pmds(mm));
+	if (mm_pgtables_bytes(mm))
+		pr_alert("BUG: non-zero pgtables_bytes on freeing mm: %ld\n",
+				mm_pgtables_bytes(mm));
 
 #if defined(CONFIG_TRANSPARENT_HUGEPAGE) && !USE_SPLIT_PMD_PTLOCKS
 	VM_BUG_ON_MM(mm->pmd_huge_pte, mm);
@@ -947,6 +947,7 @@ static inline void __mmput(struct mm_struct *mm)
 	ksm_exit(mm);
 	khugepaged_exit(mm); /* must run before exit_mmap */
 	exit_mmap(mm);
+	simple_lmk_mm_freed(mm);
 	mm_put_huge_zero_page(mm);
 	set_mm_exe_file(mm, NULL);
 	if (!list_empty(&mm->mmlist)) {
@@ -956,7 +957,6 @@ static inline void __mmput(struct mm_struct *mm)
 	}
 	if (mm->binfmt)
 		module_put(mm->binfmt->module);
-	simple_lmk_mm_freed(mm);
 	mmdrop(mm);
 }
 
@@ -1177,8 +1177,8 @@ static void mm_release(struct task_struct *tsk, struct mm_struct *mm)
 			 * not set up a proper pointer then tough luck.
 			 */
 			put_user(0, tsk->clear_child_tid);
-			sys_futex(tsk->clear_child_tid, FUTEX_WAKE,
-					1, NULL, NULL, 0);
+			do_futex(tsk->clear_child_tid, FUTEX_WAKE,
+					1, NULL, NULL, 0, 0);
 		}
 		tsk->clear_child_tid = NULL;
 	}
@@ -1830,9 +1830,6 @@ static __latent_entropy struct task_struct *copy_process(
 	retval = copy_thread_tls(clone_flags, stack_start, stack_size, p, tls);
 	if (retval)
 		goto bad_fork_cleanup_io;
-	retval = scs_prepare(p, node);
-	if (retval)
-		goto bad_fork_cleanup_thread;
 
 	if (pid != &init_struct_pid) {
 		pid = alloc_pid(p->nsproxy->pid_ns_for_children);

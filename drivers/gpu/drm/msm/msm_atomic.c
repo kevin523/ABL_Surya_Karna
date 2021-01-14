@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+ * Copyright (C) 2014 Red Hat
  * Author: Rob Clark <robdclark@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -73,22 +73,11 @@ EXPORT_SYMBOL(msm_drm_unregister_client);
  * @v: notifier data, inculde display id and display blank
  *     event(unblank or power down).
  */
-static bool notifier_enabled __read_mostly = true;
 static int msm_drm_notifier_call_chain(unsigned long val, void *v)
 {
-	if (unlikely(!notifier_enabled))
-		return 0;
-
 	return blocking_notifier_call_chain(&msm_drm_notifier_list, val,
 					    v);
 }
-
-void msm_drm_notifier_enable(bool val)
-{
-	notifier_enabled = val;
-	mb();
-}
-EXPORT_SYMBOL(msm_drm_notifier_enable);
 
 /* block until specified crtcs are no longer pending update, and
  * atomically mark them as pending update
@@ -142,7 +131,6 @@ static inline bool _msm_seamless_for_crtc(struct drm_atomic_state *state,
 
 	if (msm_is_mode_seamless(&crtc_state->mode) ||
 		msm_is_mode_seamless_vrr(&crtc_state->adjusted_mode) ||
-		msm_is_mode_seamless_poms(&crtc_state->adjusted_mode) ||
 		msm_is_mode_seamless_dyn_clk(&crtc_state->adjusted_mode))
 		return true;
 

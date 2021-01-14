@@ -161,6 +161,13 @@ static struct geni_i2c_clk_fld geni_i2c_clk_map[] = {
 	{KHz(1000), 1, 3,  9, 18},
 };
 
+int geni_i2c_get_adap_irq(struct i2c_client *client)
+{
+	struct geni_i2c_dev *gi2c = i2c_get_adapdata(client->adapter);
+
+	return gi2c->irq;
+}
+
 static int geni_i2c_clk_map_idx(struct geni_i2c_dev *gi2c)
 {
 	int i;
@@ -372,7 +379,7 @@ static void gi2c_ev_cb(struct dma_chan *ch, struct msm_gpi_cb const *cb_str,
 		break;
 	}
 	if (cb_str->cb_event != MSM_GPI_QUP_NOTIFY)
-		GENI_SE_ERR(gi2c->ipcl, true, gi2c->dev,
+		GENI_SE_DBG(gi2c->ipcl, true, gi2c->dev,
 				"GSI QN err:0x%x, status:0x%x, err:%d\n",
 				cb_str->error_log.error_code,
 				m_stat, cb_str->cb_event);
@@ -1114,6 +1121,7 @@ static struct platform_driver geni_i2c_driver = {
 		.name = "i2c_geni",
 		.pm = &geni_i2c_pm_ops,
 		.of_match_table = geni_i2c_dt_match,
+		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 	},
 };
 

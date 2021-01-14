@@ -30,7 +30,6 @@
 #include <asm/cpu_ops.h>
 #include <asm/mmu_context.h>
 #include <asm/processor.h>
-#include <asm/scs.h>
 #include <asm/sysreg.h>
 #include <asm/traps.h>
 #include <asm/virt.h>
@@ -898,15 +897,11 @@ kpti_install_ng_mappings(const struct arm64_cpu_capabilities *__unused)
 	if (kpti_applied)
 		return;
 
-	remap_fn = (void *)__pa_symbol(idmap_kpti_install_ng_mappings);
-
-	scs_save(current);
+	remap_fn = (void *)__pa_function(idmap_kpti_install_ng_mappings);
 
 	cpu_install_idmap();
 	remap_fn(cpu, num_online_cpus(), __pa_symbol(swapper_pg_dir));
 	cpu_uninstall_idmap();
-
-	scs_load(current);
 
 	if (!cpu)
 		kpti_applied = true;
@@ -1223,6 +1218,15 @@ static const struct arm64_cpu_capabilities arm64_features[] = {
 		.cpu_enable = cpu_enable_ssbs,
 	},
 #endif
+	{
+		.desc = "CRC32 instructions",
+		.capability = ARM64_HAS_CRC32,
+		.type = ARM64_CPUCAP_SYSTEM_FEATURE,
+		.matches = has_cpuid_feature,
+		.sys_reg = SYS_ID_AA64ISAR0_EL1,
+		.field_pos = ID_AA64ISAR0_CRC32_SHIFT,
+		.min_field_value = 1,
+	},
 	{},
 };
 

@@ -68,8 +68,11 @@
 #define PAGE_OFFSET		(UL(0xffffffffffffffff) - \
 	(UL(1) << (VA_BITS - 1)) + 1)
 #define KIMAGE_VADDR		(MODULES_END)
+#define BPF_JIT_REGION_START	(VA_START + KASAN_SHADOW_SIZE)
+#define BPF_JIT_REGION_SIZE	(SZ_128M)
+#define BPF_JIT_REGION_END	(BPF_JIT_REGION_START + BPF_JIT_REGION_SIZE)
 #define MODULES_END		(MODULES_VADDR + MODULES_VSIZE)
-#define MODULES_VADDR		(VA_START + KASAN_SHADOW_SIZE)
+#define MODULES_VADDR		(BPF_JIT_REGION_END)
 #define MODULES_VSIZE		(SZ_128M)
 #define VMEMMAP_START		(PAGE_OFFSET - VMEMMAP_SIZE)
 #define PCI_IO_END		(VMEMMAP_START - SZ_2M)
@@ -214,6 +217,36 @@ static inline unsigned long kaslr_offset(void)
 #define PHYS_PFN_OFFSET	(PHYS_OFFSET >> PAGE_SHIFT)
 
 /*
+ * When dealing with data aborts, watchpoints, or instruction traps we may end
+ * up with a tagged userland pointer. Clear the tag to get a sane pointer to
+ * pass on to access_ok(), for instance.
+ */
+#define __untagged_addr(addr)	\
+	((__force __typeof__(addr))sign_extend64((__force u64)(addr), 55))
+
+#define untagged_addr(addr)	({					\
+	u64 __addr = (__force u64)addr;					\
+	__addr &= __untagged_addr(__addr);				\
+	(__force __typeof__(addr))__addr;				\
+})
+
+#ifdef CONFIG_KASAN_SW_TAGS
+#define __tag_shifted(tag)	((u64)(tag) << 56)
+#define __tag_reset(addr)	__untagged_addr(addr)
+#define __tag_get(addr)		(__u8)((u64)(addr) >> 56)
+#else
+#define __tag_shifted(tag)	0UL
+#define __tag_reset(addr)	(addr)
+#define __tag_get(addr)		0
+#endif
+
+static inline const void *__tag_set(const void *addr, u8 tag)
+{
+	u64 __addr = (u64)addr & ~__tag_shifted(0xff);
+	return (const void *)(__addr | __tag_shifted(tag));
+}
+
+/*
  * Physical vs virtual RAM address space conversion.  These are
  * private definitions which should NOT be used outside memory.h
  * files.  Use virt_to_phys/phys_to_virt/__pa/__va instead.
@@ -282,6 +315,22 @@ static inline void *phys_to_virt(phys_addr_t x)
 #define pfn_to_kaddr(pfn)	__va((pfn) << PAGE_SHIFT)
 #define virt_to_pfn(x)      __phys_to_pfn(__virt_to_phys((unsigned long)(x)))
 #define sym_to_pfn(x)	    __phys_to_pfn(__pa_symbol(x))
+
+/*
+ * With non-canonical CFI jump tables, the compiler replaces function
+ * address references with the address of the function's CFI jump
+ * table entry. This results in __pa_symbol(function) returning the
+ * physical address of the jump table entry, which can lead to address
+ * space confusion since the jump table points to the function's
+ * virtual address. Therefore, use inline assembly to ensure we are
+ * always taking the address of the actual function.
+ */
+#define __pa_function(x) ({						\
+	unsigned long addr;						\
+	asm("adrp %0, " __stringify(x) "\n\t"				\
+	    "add  %0, %0, :lo12:" __stringify(x) : "=r" (addr));	\
+	__pa_symbol(addr);						\
+})
 
 /*
  *  virt_to_page(k)	convert a _valid_ virtual address to struct page *

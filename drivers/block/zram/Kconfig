@@ -55,8 +55,8 @@ config ZRAM_MEMORY_TRACKING
 	  See Documentation/blockdev/zram.txt for more information.
 
 config ZRAM_DEFAULT_COMP_ALGORITHM
-	string "Default ZRAM algorithm"
-	default "lzo" 
+	string "Default ZRAM compression algorithm"
+	default "lzo"
 
 config ZRAM_SIZE_OVERRIDE
 	int "zram size to set from kernel"

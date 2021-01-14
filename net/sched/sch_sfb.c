@@ -2,7 +2,7 @@
  * net/sched/sch_sfb.c	  Stochastic Fair Blue
  *
  * Copyright (c) 2008-2011 Juliusz Chroboczek <jch@pps.jussieu.fr>
- * Copyright (C) 2020 XiaoMi, Inc.
+ * Copyright (c) 2011 Eric Dumazet <eric.dumazet@gmail.com>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -269,7 +269,6 @@ static bool sfb_classify(struct sk_buff *skb, struct tcf_proto *fl,
 		case TC_ACT_QUEUED:
 		case TC_ACT_TRAP:
 			*qerr = NET_XMIT_SUCCESS | __NET_XMIT_STOLEN;
-			/* fall through */
 		case TC_ACT_SHOT:
 			return false;
 		}
@@ -555,7 +554,7 @@ static int sfb_init(struct Qdisc *sch, struct nlattr *opt)
 	struct sfb_sched_data *q = qdisc_priv(sch);
 	int err;
 
-	err = tcf_block_get(&q->block, &q->filter_list, sch);
+	err = tcf_block_get(&q->block, &q->filter_list);
 	if (err)
 		return err;
 

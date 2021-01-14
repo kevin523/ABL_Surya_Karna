@@ -1236,6 +1236,8 @@ __nf_conntrack_alloc(struct net *net,
 	if (ct == NULL)
 		goto out;
 
+	kmemleak_not_leak(ct);
+
 	spin_lock_init(&ct->lock);
 	ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple = *orig;
 	ct->tuplehash[IP_CT_DIR_ORIGINAL].hnnode.pprev = NULL;
@@ -2148,6 +2150,7 @@ static __always_inline unsigned int total_extension_size(void)
 
 int nf_conntrack_init_start(void)
 {
+	unsigned long nr_pages = totalram_pages();
 	int max_factor = 8;
 	int ret = -ENOMEM;
 	int i;
@@ -2167,11 +2170,11 @@ int nf_conntrack_init_start(void)
 		 * >= 4GB machines have 65536 buckets.
 		 */
 		nf_conntrack_htable_size
-			= (((totalram_pages << PAGE_SHIFT) / 16384)
+			= (((nr_pages << PAGE_SHIFT) / 16384)
 			   / sizeof(struct hlist_head));
-		if (totalram_pages > (4 * (1024 * 1024 * 1024 / PAGE_SIZE)))
+		if (nr_pages > (4 * (1024 * 1024 * 1024 / PAGE_SIZE)))
 			nf_conntrack_htable_size = 65536;
-		else if (totalram_pages > (1024 * 1024 * 1024 / PAGE_SIZE))
+		else if (nr_pages > (1024 * 1024 * 1024 / PAGE_SIZE))
 			nf_conntrack_htable_size = 16384;
 		if (nf_conntrack_htable_size < 32)
 			nf_conntrack_htable_size = 32;

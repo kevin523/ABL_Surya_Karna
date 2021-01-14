@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2010 - 2018 Novatek, Inc.
- * Copyright (C) 2020 XiaoMi, Inc.
+ *
  * $Revision: 43560 $
  * $Date: 2019-04-19 11:34:19 +0800 (週五, 19 四月 2019) $
  *
@@ -127,37 +127,6 @@ const uint16_t gesture_key_array[] = {
 	KEY_WAKEUP,  //GESTURE_SLIDE_LEFT
 	KEY_WAKEUP,  //GESTURE_SLIDE_RIGHT
 	KEY_POWER,	 //FOR PALM USING ONLY
-};
-#endif
-
-#ifdef CONFIG_MTK_SPI
-const struct mt_chip_conf spi_ctrdata = {
-	.setuptime = 25,
-	.holdtime = 25,
-	.high_time = 5,	/* 10MHz (SPI_SPEED=100M / (high_time+low_time(10ns)))*/
-	.low_time = 5,
-	.cs_idletime = 2,
-	.ulthgh_thrsh = 0,
-	.cpol = 0,
-	.cpha = 0,
-	.rx_mlsb = 1,
-	.tx_mlsb = 1,
-	.tx_endian = 0,
-	.rx_endian = 0,
-	.com_mod = DMA_TRANSFER,
-	.pause = 0,
-	.finish_intr = 1,
-	.deassert = 0,
-	.ulthigh = 0,
-	.tckdly = 0,
-};
-#endif
-
-#ifdef CONFIG_SPI_MT65XX
-const struct mtk_chip_config spi_ctrdata = {
-    .rx_mlsb = 1,
-    .tx_mlsb = 1,
-    .cs_pol = 0,
 };
 #endif
 
@@ -313,6 +282,21 @@ static inline int32_t spi_read_write(struct spi_device *client, uint8_t *buf, si
 	spi_message_init(&m);
 	spi_message_add_tail(&t, &m);
 	return spi_sync(client, &m);
+}
+
+static void nvt_pm_qos(bool enable)
+{
+	if (unlikely(!pm_qos_request_active(&ts->pm_touch_req)) || 
+		unlikely(!pm_qos_request_active(&ts->pm_spi_req)))
+		return;
+
+	if (enable) {
+		pm_qos_update_request(&ts->pm_touch_req, 100);
+		pm_qos_update_request(&ts->pm_spi_req, 100);
+	} else {
+		pm_qos_update_request(&ts->pm_touch_req, PM_QOS_DEFAULT_VALUE);
+		pm_qos_update_request(&ts->pm_spi_req, PM_QOS_DEFAULT_VALUE);
+	}
 }
 
 /*******************************************************
@@ -786,16 +770,19 @@ info_retry:
 #ifdef CHECK_TOUCH_VENDOR
 	switch (ts->touch_vendor_id) {
 	case TP_VENDOR_HUAXING:
-		snprintf(tp_info_buf, PAGE_SIZE, "[Vendor]huaxing,[FW]0x%02x,[IC]nt36672c\n", ts->fw_ver);
+		snprintf(tp_info_buf, sizeof(tp_info_buf),
+				 "[Vendor]huaxing,[FW]0x%02x,[IC]nt36672c\n", ts->fw_ver);
 		update_lct_tp_info(tp_info_buf, NULL);
 		break;
 	case TP_VENDOR_TIANMA:
-		snprintf(tp_info_buf, PAGE_SIZE, "[Vendor]tianma,[FW]0x%02x,[IC]nt36672c\n", ts->fw_ver);
+		snprintf(tp_info_buf, sizeof(tp_info_buf),
+				 "[Vendor]tianma,[FW]0x%02x,[IC]nt36672c\n", ts->fw_ver);
 		update_lct_tp_info(tp_info_buf, NULL);
 		break;
 	}
 #else
-	snprintf(tp_info_buf, PAGE_SIZE, "[Vendor]unknown,[FW]0x%02x,[IC]nt36672c\n", ts->fw_ver);
+	snprintf(tp_info_buf, sizeof(tp_info_buf),
+			 "[Vendor]unknown,[FW]0x%02x,[IC]nt36672c\n", ts->fw_ver);
 	update_lct_tp_info(tp_info_buf, NULL);
 #endif
 
@@ -1344,7 +1331,6 @@ int32_t nvt_check_palm(uint8_t input_id, uint8_t *data)
 /*2020.2.28 longcheer taocheng add for pocket mode end*/
 #endif
 
-#define POINT_DATA_LEN 65
 /*******************************************************
 Description:
 	Novatek touchscreen work function.
@@ -1352,8 +1338,11 @@ Description:
 return:
 	n.a.
 *******************************************************/
-static irqreturn_t nvt_ts_work_func(int irq, void *data)
+#define POINT_DATA_LEN 65
+static void nvt_ts_worker(struct work_struct *work)
 {
+	struct nvt_ts_data *ts = container_of(work, struct nvt_ts_data, irq_work);
+
 	int32_t ret = -1;
 	uint8_t point_data[POINT_DATA_LEN + 1 + DUMMY_BYTES] = {0};
 	uint32_t position = 0;
@@ -1374,12 +1363,13 @@ static irqreturn_t nvt_ts_work_func(int irq, void *data)
 		ret = wait_for_completion_timeout(&ts->dev_pm_suspend_completion, msecs_to_jiffies(700));
 		if (!ret) {
 			NVT_ERR("system(spi bus) can't finished resuming procedure, skip it");
-			return IRQ_HANDLED;
+			return;
 		}
 	}
 #endif
 #endif
 
+	nvt_pm_qos(true);
 	mutex_lock(&ts->lock);
 
 	ret = CTP_SPI_READ(ts->client, point_data, POINT_DATA_LEN + 1);
@@ -1422,11 +1412,10 @@ static irqreturn_t nvt_ts_work_func(int irq, void *data)
 	}
 #endif
 #if WAKEUP_GESTURE
-	if (bTouchIsAwake == 0) {
+	if (unlikely(!bTouchIsAwake)) {
 		//input_id = (uint8_t)(point_data[1] >> 3);
 		nvt_ts_wakeup_gesture_report(input_id, point_data);
-		mutex_unlock(&ts->lock);
-		return IRQ_HANDLED;
+		goto XFER_ERROR;
 	}
 #endif
 	finger_cnt = 0;
@@ -1505,7 +1494,6 @@ static irqreturn_t nvt_ts_work_func(int irq, void *data)
 
 #if LCT_TP_PALM_EN
 	//nvt_check_palm(input_id, point_data);
-	//mutex_unlock(&ts->lock);
 	//return IRQ_HANDLED;
 #endif
 
@@ -1524,13 +1512,25 @@ static irqreturn_t nvt_ts_work_func(int irq, void *data)
 		}
 	}
 #endif
-
 	input_sync(ts->input_dev);
 
 XFER_ERROR:
-
 	mutex_unlock(&ts->lock);
+	nvt_pm_qos(false);
+	return;
+}
 
+/*******************************************************
+Description:
+	Novatek touchscreen irq handler.
+
+return:
+	n.a.
+*******************************************************/
+static irqreturn_t nvt_ts_work_func(int irq, void *data)
+{
+	struct nvt_ts_data *ts = data;
+	queue_work(ts->coord_workqueue, &ts->irq_work);
 	return IRQ_HANDLED;
 }
 
@@ -2307,18 +2307,6 @@ static int32_t nvt_ts_probe(struct spi_device *client)
 		goto err_spi_setup;
 	}
 
-#ifdef CONFIG_MTK_SPI
-    /* old usage of MTK spi API */
-    memcpy(&ts->spi_ctrl, &spi_ctrdata, sizeof(struct mt_chip_conf));
-    ts->client->controller_data = (void *)&ts->spi_ctrl;
-#endif
-
-#ifdef CONFIG_SPI_MT65XX
-    /* new usage of MTK spi API */
-    memcpy(&ts->spi_ctrl, &spi_ctrdata, sizeof(struct mtk_chip_config));
-    ts->client->controller_data = (void *)&ts->spi_ctrl;
-#endif
-
 	NVT_LOG("mode=%d, max_speed_hz=%d\n", ts->client->mode, ts->client->max_speed_hz);
 
 	//---parse dts---
@@ -2336,7 +2324,7 @@ static int32_t nvt_ts_probe(struct spi_device *client)
 		goto err_get_regulator;
 	}
 
-	ret = nvt_ts_enable_regulator(false);//default disable regulator
+	ret = nvt_ts_enable_regulator(true);
 	if (ret < 0) {
 		NVT_ERR("Failed to enable regulator\n");
 		goto err_enable_regulator;
@@ -2446,7 +2434,8 @@ static int32_t nvt_ts_probe(struct spi_device *client)
 		NVT_LOG("int_trigger_type=%d\n", ts->int_trigger_type);
 		ts->irq_enabled = true;
 		ret = request_threaded_irq(client->irq, NULL, nvt_ts_work_func,
-				ts->int_trigger_type | IRQF_ONESHOT, NVT_SPI_NAME, ts);
+				ts->int_trigger_type |
+				IRQF_ONESHOT | IRQF_NO_SUSPEND, NVT_SPI_NAME, ts);
 		if (ret != 0) {
 			NVT_ERR("request irq failed. ret=%d\n", ret);
 			goto err_int_request_failed;
@@ -2455,6 +2444,16 @@ static int32_t nvt_ts_probe(struct spi_device *client)
 			NVT_LOG("request irq %d succeed\n", client->irq);
 		}
 	}
+
+	ts->pm_spi_req.type = PM_QOS_REQ_AFFINE_IRQ;
+	ts->pm_spi_req.irq = geni_spi_get_master_irq(client);
+	pm_qos_add_request(&ts->pm_spi_req, PM_QOS_CPU_DMA_LATENCY,
+		PM_QOS_DEFAULT_VALUE);
+
+	ts->pm_touch_req.type = PM_QOS_REQ_AFFINE_IRQ;
+	ts->pm_touch_req.irq = client->irq;
+	pm_qos_add_request(&ts->pm_touch_req, PM_QOS_CPU_DMA_LATENCY,
+		PM_QOS_DEFAULT_VALUE);
 
 #if WAKEUP_GESTURE
 	device_init_wakeup(&ts->input_dev->dev, 1);
@@ -2558,14 +2557,20 @@ static int32_t nvt_ts_probe(struct spi_device *client)
 		NVT_LOG("init_lct_tp_palm Succeeded!");
 	}
 #endif
-
-#if defined(CONFIG_FB)
+	ts->coord_workqueue = alloc_workqueue("nvt_ts_workqueue", WQ_HIGHPRI, 0);
+	if (!ts->coord_workqueue) {
+		NVT_ERR("create nvt_ts_workqueue fail");
+		ret = -ENOMEM;
+		goto err_create_nvt_ts_workqueue_failed;
+	}
+	INIT_WORK(&ts->irq_work, nvt_ts_worker);
 	ts->workqueue = create_singlethread_workqueue("nvt_ts_workqueue");
 	if (!ts->workqueue) {
 		NVT_ERR("create nvt_ts_workqueue fail");
 		ret = -ENOMEM;
 		goto err_create_nvt_ts_workqueue_failed;
 	}
+#if defined(CONFIG_FB)
 	INIT_WORK(&ts->resume_work, nvt_ts_resume_work);
 #ifdef _MSM_DRM_NOTIFY_H_
 	ts->drm_notif.notifier_call = nvt_drm_notifier_callback;
@@ -2655,8 +2660,10 @@ err_class_create:
 	class_destroy(ts->nvt_tp_class);
 	ts->nvt_tp_class = NULL;
 
-#if defined(CONFIG_FB)
 err_create_nvt_ts_workqueue_failed:
+	if (ts->coord_workqueue)
+		destroy_workqueue(ts->coord_workqueue);
+#if defined(CONFIG_FB)
 	if (ts->workqueue)
 		destroy_workqueue(ts->workqueue);
 #ifdef _MSM_DRM_NOTIFY_H_
@@ -2774,6 +2781,10 @@ static int32_t nvt_ts_remove(struct spi_device *client)
 {
 	NVT_LOG("Removing driver...\n");
 
+	pm_qos_remove_request(&ts->pm_touch_req);
+	pm_qos_remove_request(&ts->pm_spi_req);
+	if (ts->coord_workqueue)
+		destroy_workqueue(ts->coord_workqueue);
 #if defined(CONFIG_FB)
 	if (ts->workqueue)
 		destroy_workqueue(ts->workqueue);
@@ -3303,6 +3314,7 @@ static int32_t __init nvt_driver_init(void)
 	int32_t ret = 0;
 
 	NVT_LOG("start\n");
+
 #ifdef CHECK_TOUCH_VENDOR
 	//Check TP vendor
 	if (IS_ERR_OR_NULL(saved_command_line)) {
@@ -3359,8 +3371,7 @@ static void __exit nvt_driver_exit(void)
 	spi_unregister_driver(&nvt_spi_driver);
 }
 
-//late_initcall(nvt_driver_init);
-module_init(nvt_driver_init);
+device_initcall(nvt_driver_init);
 module_exit(nvt_driver_exit);
 
 MODULE_DESCRIPTION("Novatek Touchscreen Driver");

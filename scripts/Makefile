@@ -30,6 +30,8 @@ always		:= $(hostprogs-y) $(hostprogs-m)
 # The following hostprogs-y programs are only build on demand
 hostprogs-y += unifdef
 
+extra-$(CONFIG_LTO_CLANG)   += module-lto.lds
+
 # These targets are used internally to avoid "is up to date" messages
 PHONY += build_unifdef
 build_unifdef: $(obj)/unifdef
@@ -38,7 +40,8 @@ build_unifdef: $(obj)/unifdef
 subdir-$(CONFIG_MODVERSIONS) += genksyms
 subdir-y                     += mod
 subdir-$(CONFIG_SECURITY_SELINUX) += selinux
-subdir-$(CONFIG_DTC)         += dtc
+subdir-$(CONFIG_DTC)         += dtc-aosp
+subdir-$(CONFIG_BUILD_ARM64_EMBEDDED_DTB) += ufdt
 subdir-$(CONFIG_GDB_SCRIPTS) += gdb
 
 # Let clean descend into subdirs

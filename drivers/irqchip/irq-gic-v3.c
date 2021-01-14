@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2013-2017 ARM Limited, All Rights Reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+ * Author: Marc Zyngier <marc.zyngier@arm.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -34,6 +34,7 @@
 #include <linux/irqchip/arm-gic-common.h>
 #include <linux/irqchip/arm-gic-v3.h>
 #include <linux/irqchip/irq-partition-percpu.h>
+#include <linux/wakeup_reason.h>
 
 #include <asm/cputype.h>
 #include <asm/exception.h>
@@ -465,8 +466,6 @@ static void gic_show_resume_irq(struct gic_chip_data *gic)
 			name = desc->action->name;
 
 		pr_warn("%s: %d triggered %s\n", __func__, irq, name);
-//2020.04.27 add longcheer fengxingqiang "recording wakeup reason"
-		log_wakeup_reason(irq);
 	}
 }
 
@@ -567,6 +566,8 @@ static asmlinkage void __exception_irq_entry gic_handle_irq(struct pt_regs *regs
 			err = handle_domain_irq(gic_data.domain, irqnr, regs);
 			if (err) {
 				WARN_ONCE(true, "Unexpected interrupt received!\n");
+				log_bad_wake_reason("unmapped HW IRQ %u",
+						    irqnr);
 				if (static_key_true(&supports_deactivate)) {
 					if (irqnr < 8192)
 						gic_write_dir(irqnr);
@@ -692,7 +693,7 @@ static int __gic_populate_rdist(struct redist_region *region, void __iomem *ptr)
 		gic_data_rdist_rd_base() = ptr;
 		gic_data_rdist()->phys_base = region->phys_base + offset;
 
-		pr_info("CPU%d: found redistributor %lx region %d:%pa\n",
+		pr_debug("CPU%d: found redistributor %lx region %d:%pa\n",
 			smp_processor_id(), mpidr,
 			(int)(region - gic_data.redist_regions),
 			&gic_data_rdist()->phys_base);
@@ -855,7 +856,6 @@ static void gic_send_sgi(u64 cluster_id, u16 tlist, unsigned int irq)
 	       MPIDR_TO_SGI_AFFINITY(cluster_id, 1)	|
 	       tlist << ICC_SGI1R_TARGET_LIST_SHIFT);
 
-	pr_devel("CPU%d: ICC_SGI1R_EL1 %llx\n", smp_processor_id(), val);
 	gic_write_sgi1r(val);
 }
 

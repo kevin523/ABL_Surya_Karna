@@ -193,6 +193,8 @@ static int __init vdso_mappings_init(const char *name,
 	if (vdso_pagelist == NULL)
 		return -ENOMEM;
 
+	kmemleak_not_leak(vdso_pagelist);
+
 	/* Grab the vDSO data page. */
 	vdso_pagelist[0] = phys_to_page(__pa_symbol(vdso_data));
 
@@ -335,9 +337,6 @@ void update_vsyscall(struct timekeeper *tk)
 							tk->tkr_mono.shift;
 	vdso_data->wtm_clock_sec		= tk->wall_to_monotonic.tv_sec;
 	vdso_data->wtm_clock_nsec		= tk->wall_to_monotonic.tv_nsec;
-
-	/* Read without the seqlock held by clock_getres() */
-	WRITE_ONCE(vdso_data->hrtimer_res, hrtimer_resolution);
 
 	if (!use_syscall) {
 		struct timespec btm = ktime_to_timespec(tk->offs_boot);

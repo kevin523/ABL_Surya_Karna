@@ -1,5 +1,5 @@
 /* Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+ *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
  * only version 2 as published by the Free Software Foundation.
@@ -122,7 +122,6 @@ static inline void pd_phy_close(void)
 {
 }
 #endif
-
 enum uvdm_state {
 	USBPD_UVDM_DISCONNECT,
 	USBPD_UVDM_CHARGER_VERSION,

@@ -157,7 +157,7 @@ struct scan_control {
 /*
  * From 0 .. 100.  Higher means more swappy.
  */
-int vm_swappiness = 50;
+int vm_swappiness = 60;
 /*
  * The total number of pages which are beyond the high watermark within all
  * zones.
@@ -347,9 +347,18 @@ static unsigned long do_shrink_slab(struct shrink_control *shrinkctl,
 	nr = atomic_long_xchg(&shrinker->nr_deferred[nid], 0);
 
 	total_scan = nr;
-	delta = freeable >> priority;
-	delta *= 4;
-	do_div(delta, shrinker->seeks);
+	if (shrinker->seeks) {
+		delta = freeable >> priority;
+		delta *= 4;
+		do_div(delta, shrinker->seeks);
+	} else {
+		/*
+		 * These objects don't require any IO to create. Trim
+		 * them aggressively under memory pressure to keep
+		 * them from causing refetches in the IO caches.
+		 */
+		delta = freeable / 2;
+	}
 
 	total_scan += delta;
 	if (total_scan < 0) {
@@ -471,16 +480,8 @@ static unsigned long shrink_slab(gfp_t gfp_mask, int nid,
 	if (memcg && (!memcg_kmem_enabled() || !mem_cgroup_online(memcg)))
 		return 0;
 
-	if (!down_read_trylock(&shrinker_rwsem)) {
-		/*
-		 * If we would return 0, our callers would understand that we
-		 * have nothing else to shrink and give up trying. By returning
-		 * 1 we keep it going and assume we'll be able to shrink next
-		 * time.
-		 */
-		freed = 1;
+	if (!down_read_trylock(&shrinker_rwsem))
 		goto out;
-	}
 
 	list_for_each_entry(shrinker, &shrinker_list, list) {
 		struct shrink_control sc = {
@@ -2179,7 +2180,7 @@ static void shrink_active_list(unsigned long nr_to_scan,
  * If that fails and refaulting is observed, the inactive list grows.
  *
  * The inactive_ratio is the target ratio of ACTIVE to INACTIVE pages
- * on this LRU, maintained by the pageout code. A zone->inactive_ratio
+ * on this LRU, maintained by the pageout code. An inactive_ratio
  * of 3 means 3:1 or 25% of the pages are kept on the inactive list.
  *
  * total     target    max
@@ -3498,7 +3499,8 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int classzone_idx)
 			wake_up_all(&pgdat->pfmemalloc_wait);
 
 		/* Check if kswapd should be suspending */
-		if (try_to_freeze() || kthread_should_stop())
+		if (try_to_freeze() || kthread_should_stop() ||
+		    !atomic_long_read(&kswapd_waiters))
 			break;
 
 		/*
@@ -3720,9 +3722,14 @@ kswapd_try_sleep:
 }
 
 /*
- * A zone is low on free memory, so wake its kswapd task to service it.
+ * A zone is low on free memory or too fragmented for high-order memory.  If
+ * kswapd should reclaim (direct reclaim is deferred), wake it up for the zone's
+ * pgdat.  It will wake up kcompactd after reclaiming memory.  If kswapd reclaim
+ * has failed or is not needed, still wake up kcompactd if only compaction is
+ * needed.
  */
-void wakeup_kswapd(struct zone *zone, int order, enum zone_type classzone_idx)
+void wakeup_kswapd(struct zone *zone, gfp_t gfp_flags, int order,
+		   enum zone_type classzone_idx)
 {
 	pg_data_t *pgdat;
 	enum zone_type curr_idx;
@@ -3730,7 +3737,7 @@ void wakeup_kswapd(struct zone *zone, int order, enum zone_type classzone_idx)
 	if (!managed_zone(zone))
 		return;
 
-	if (!cpuset_zone_allowed(zone, GFP_KERNEL | __GFP_HARDWALL))
+	if (!cpuset_zone_allowed(zone, gfp_flags))
 		return;
 
 	pgdat = zone->zone_pgdat;
@@ -3745,14 +3752,23 @@ void wakeup_kswapd(struct zone *zone, int order, enum zone_type classzone_idx)
 	if (!waitqueue_active(&pgdat->kswapd_wait))
 		return;
 
-	/* Hopeless node, leave it to direct reclaim */
-	if (pgdat->kswapd_failures >= MAX_RECLAIM_RETRIES)
+	/* Hopeless node, leave it to direct reclaim if possible */
+	if (pgdat->kswapd_failures >= MAX_RECLAIM_RETRIES ||
+	    pgdat_balanced(pgdat, order, classzone_idx)) {
+		/*
+		 * There may be plenty of free memory available, but it's too
+		 * fragmented for high-order allocations.  Wake up kcompactd
+		 * and rely on compaction_suitable() to determine if it's
+		 * needed.  If it fails, it will defer subsequent attempts to
+		 * ratelimit its work.
+		 */
+		if (!(gfp_flags & __GFP_DIRECT_RECLAIM))
+			wakeup_kcompactd(pgdat, order, classzone_idx);
 		return;
+	}
 
-	if (pgdat_balanced(pgdat, order, classzone_idx))
-		return;
-
-	trace_mm_vmscan_wakeup_kswapd(pgdat->node_id, classzone_idx, order);
+	trace_mm_vmscan_wakeup_kswapd(pgdat->node_id, classzone_idx, order,
+				      gfp_flags);
 	wake_up_interruptible(&pgdat->kswapd_wait);
 }
 

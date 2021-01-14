@@ -2,7 +2,7 @@
  * BQ2570x battery charging driver
  *
  * Copyright (C) 2017 Texas Instruments *
- * Copyright (C) 2020 XiaoMi, Inc.
+ * This package is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
 
@@ -134,7 +134,7 @@ do {											\
 	else if (bq->mode == BQ25970_ROLE_SLAVE)					\
 		printk(KERN_ERR "[bq2597x-SLAVE]:%s:" fmt, __func__, ##__VA_ARGS__);	\
 	else										\
-		printk(KERN_ERR "[bq2597x-STANDALONE]:%s:" fmt, __func__, ##__VA_ARGS__);\
+		pr_debug(KERN_ERR "[bq2597x-STANDALONE]:%s:" fmt, __func__, ##__VA_ARGS__);\
 } while (0);
 
 #define bq_info(fmt, ...)								\
@@ -144,7 +144,7 @@ do {											\
 	else if (bq->mode == BQ25970_ROLE_SLAVE)					\
 		printk(KERN_INFO "[bq2597x-SLAVE]:%s:" fmt, __func__, ##__VA_ARGS__);	\
 	else										\
-		printk(KERN_INFO "[bq2597x-STANDALONE]:%s:" fmt, __func__, ##__VA_ARGS__);\
+		pr_debug(KERN_INFO "[bq2597x-STANDALONE]:%s:" fmt, __func__, ##__VA_ARGS__);\
 } while (0);
 
 #define bq_dbg(fmt, ...)								\
@@ -154,7 +154,7 @@ do {											\
 	else if (bq->mode == BQ25970_ROLE_SLAVE)					\
 		printk(KERN_DEBUG "[bq2597x-SLAVE]:%s:" fmt, __func__, ##__VA_ARGS__);	\
 	else										\
-		printk(KERN_DEBUG "[bq2597x-STANDALONE]:%s:" fmt, __func__, ##__VA_ARGS__);\
+		pr_debug(KERN_DEBUG "[bq2597x-STANDALONE]:%s:" fmt, __func__, ##__VA_ARGS__);\
 } while (0);
 
 enum hvdcp3_type {
@@ -474,30 +474,6 @@ static int bq2597x_enable_wdt(struct bq2597x *bq, bool enable)
 	return ret;
 }
 EXPORT_SYMBOL_GPL(bq2597x_enable_wdt);
-
-static int bq2597x_set_wdt(struct bq2597x *bq, int ms)
-{
-	int ret;
-	u8 val;
-
-	if (ms == 500)
-		val = BQ2597X_WATCHDOG_0P5S;
-	else if (ms == 1000)
-		val = BQ2597X_WATCHDOG_1S;
-	else if (ms == 5000)
-		val = BQ2597X_WATCHDOG_5S;
-	else if (ms == 30000)
-		val = BQ2597X_WATCHDOG_30S;
-	else
-		val = BQ2597X_WATCHDOG_30S;
-
-	val <<= BQ2597X_WATCHDOG_SHIFT;
-
-	ret = bq2597x_update_bits(bq, BQ2597X_REG_0B,
-				BQ2597X_WATCHDOG_MASK, val);
-	return ret;
-}
-EXPORT_SYMBOL_GPL(bq2597x_set_wdt);
 
 static int bq2597x_enable_batovp(struct bq2597x *bq, bool enable)
 {
@@ -1107,23 +1083,6 @@ static int bq2597x_set_alarm_int_mask(struct bq2597x *bq, u8 mask)
 }
 EXPORT_SYMBOL_GPL(bq2597x_set_alarm_int_mask);
 
-static int bq2597x_clear_alarm_int_mask(struct bq2597x *bq, u8 mask)
-{
-	int ret;
-	u8 val;
-
-	ret = bq2597x_read_byte(bq, BQ2597X_REG_0F, &val);
-	if (ret)
-		return ret;
-
-	val &= ~mask;
-
-	ret = bq2597x_write_byte(bq, BQ2597X_REG_0F, val);
-
-	return ret;
-}
-EXPORT_SYMBOL_GPL(bq2597x_clear_alarm_int_mask);
-
 static int bq2597x_set_fault_int_mask(struct bq2597x *bq, u8 mask)
 {
 	int ret;
@@ -1140,24 +1099,6 @@ static int bq2597x_set_fault_int_mask(struct bq2597x *bq, u8 mask)
 	return ret;
 }
 EXPORT_SYMBOL_GPL(bq2597x_set_fault_int_mask);
-
-static int bq2597x_clear_fault_int_mask(struct bq2597x *bq, u8 mask)
-{
-	int ret;
-	u8 val;
-
-	ret = bq2597x_read_byte(bq, BQ2597X_REG_12, &val);
-	if (ret)
-		return ret;
-
-	val &= ~mask;
-
-	ret = bq2597x_write_byte(bq, BQ2597X_REG_12, val);
-
-	return ret;
-}
-EXPORT_SYMBOL_GPL(bq2597x_clear_fault_int_mask);
-
 
 static int bq2597x_set_sense_resistor(struct bq2597x *bq, int r_mohm)
 {
@@ -2360,7 +2301,7 @@ static int bq2597x_charger_probe(struct i2c_client *client,
 		return ret;
 
 
-	pr_err("lct client->irq=d%\n",client->irq);
+	pr_err("lct client->irq=%d\n",client->irq);
 
 	ret = bq_charger_int(bq);
 	if (ret < 0) {

@@ -547,12 +547,12 @@ static int mhi_netdev_change_mtu(struct net_device *dev, int new_mtu)
 	return 0;
 }
 
-static int mhi_netdev_xmit(struct sk_buff *skb, struct net_device *dev)
+static netdev_tx_t mhi_netdev_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct mhi_netdev_priv *mhi_netdev_priv = netdev_priv(dev);
 	struct mhi_netdev *mhi_netdev = mhi_netdev_priv->mhi_netdev;
 	struct mhi_device *mhi_dev = mhi_netdev->mhi_dev;
-	int res = 0;
+	netdev_tx_t res = NETDEV_TX_OK;
 
 	MSG_VERB("Entered\n");
 
@@ -924,7 +924,7 @@ static void mhi_netdev_create_debugfs_dir(void)
 
 #else
 
-static void mhi_netdev_create_debugfs(struct mhi_netdev_private *mhi_netdev)
+static void mhi_netdev_create_debugfs(struct mhi_netdev *mhi_netdev)
 {
 }
 

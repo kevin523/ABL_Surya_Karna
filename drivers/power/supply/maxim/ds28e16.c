@@ -1,6 +1,6 @@
 /*******************************************************************************
  * Copyright (C) 2015 Maxim Integrated Products, Inc., All Rights Reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+ *
  *******************************************************************************
  *
  *  DS28E16.c - DS28E16 device module. Requires low level 1-Wire connection.
@@ -31,10 +31,10 @@
 #include <linux/regmap.h>
 #include <linux/random.h>
 
-#define ds_info	pr_err
-#define ds_dbg	pr_err
+#define ds_info	pr_debug
+#define ds_dbg	pr_debug
 #define ds_err	pr_err
-#define ds_log	pr_err
+#define ds_log	pr_debug
 
 struct ds28e16_data {
 	struct platform_device *pdev;
@@ -822,24 +822,20 @@ unsigned char *Challenge, unsigned char *Secret_Seeds, unsigned char *S_Secret)
 	int msg_len = 0;
 	unsigned char flag = DS_FALSE;
 
-	//if (flag_mi_auth_result)
 	if (mi_auth_result == DS_TRUE)
 		return mi_auth_result;
 
-	//if (anon != ANONYMOUS) {
+	if (ds28el16_Read_RomID_retry(mi_romid) != DS_TRUE) {
+		ow_reset();
+		return ERROR_R_ROMID;
+	}
 
-		if (ds28el16_Read_RomID_retry(mi_romid) != DS_TRUE) {
-			ow_reset();
-			return ERROR_R_ROMID;
-		}
-
-		if (ds28el16_get_page_status_retry(status_chip) == DS_TRUE) {
-			MANID[0] = status_chip[4];
-		} else {
-			ow_reset();
-			return ERROR_R_STATUS;
-		}
-	//}
+	if (ds28el16_get_page_status_retry(status_chip) == DS_TRUE) {
+		MANID[0] = status_chip[4];
+	} else {
+		ow_reset();
+		return ERROR_R_STATUS;
+	}
 
 	// DS28E16 calculate its session secret
 	flag = DS28E16_cmd_computeS_Secret_retry(anon,
@@ -1155,11 +1151,47 @@ static enum power_supply_property verify_props[] = {
 	POWER_SUPPLY_PROP_CHIP_OK,
 };
 
+struct ds28e16_saved_data {
+	unsigned char buf[20];
+	bool was_read;
+	int prop_length;
+};
+static struct ds28e16_saved_data saved_data[POWER_SUPPLY_PROP_MAX];
+
 static int verify_get_property(struct power_supply *psy, enum power_supply_property psp,
 					union power_supply_propval *val)
 {
 	int ret;
 	unsigned char buf[50];
+	struct ds28e16_saved_data *sd = saved_data + psp;
+
+	switch (psp) {
+	case POWER_SUPPLY_PROP_PAGEDATA:
+	case POWER_SUPPLY_PROP_PAGE0_DATA:
+	case POWER_SUPPLY_PROP_PAGE1_DATA:
+	case POWER_SUPPLY_PROP_ROMID:
+	case POWER_SUPPLY_PROP_DS_STATUS:
+		if (!sd->was_read) {
+			pr_info("reading data, propnum: %i,", psp);
+			break;
+		} else {
+			int i;
+			if (!sd->prop_length) {
+				pr_err("last read of prop %i ended in error, retrying...", psp);
+				break;
+			}
+			memcpy(val->arrayval, sd->buf, sd->prop_length);
+			pr_info("returning saved data, propnum: %i", psp);
+			pr_info("data: ");
+			for (i = 0; i < sd->prop_length; ++i)
+				pr_cont("%02x, ", sd->buf[i]);
+
+			return 0;
+		}
+		break;
+	default:
+		break;
+	}
 
 	switch (psp) {
 	case POWER_SUPPLY_PROP_VERIFY_MODEL_NAME:
@@ -1185,6 +1217,7 @@ static int verify_get_property(struct power_supply *psy, enum power_supply_prope
 		memcpy(val->arrayval, mi_romid, 8);
 		if (ret != DS_TRUE)
 			return -EAGAIN;
+		sd->prop_length = 8;
 		break;
 	case POWER_SUPPLY_PROP_CHIP_OK:
 		ds_log("getian---POWER_SUPPLY_PROP_CHIP_OK\n");
@@ -1200,30 +1233,38 @@ static int verify_get_property(struct power_supply *psy, enum power_supply_prope
 		memcpy(val->arrayval, buf, 8);
 		if (ret != DS_TRUE)
 			return -EAGAIN;
+		sd->prop_length = 8;
 		break;
 	case POWER_SUPPLY_PROP_PAGEDATA:
 		ret = ds28el16_get_page_data_retry(pagenumber, buf);
 		memcpy(val->arrayval, buf, 16);
 		if (ret != DS_TRUE)
 			return -EAGAIN;
+		sd->prop_length = 16;
 		break;
 	case POWER_SUPPLY_PROP_PAGE0_DATA:
 		ret = ds28el16_get_page_data_retry(0, buf);
 		memcpy(val->arrayval, buf, 16);
 		if (ret != DS_TRUE)
 			return -EAGAIN;
+		sd->prop_length = 16;
 		break;
 	case POWER_SUPPLY_PROP_PAGE1_DATA:
 		ret = ds28el16_get_page_data_retry(1, buf);
 		memcpy(val->arrayval, buf, 16);
 		if (ret != DS_TRUE)
 			return -EAGAIN;
+		sd->prop_length = 16;
 		break;
 	default:
-		ds_err("unsupported property %d\n", psp);
+		ds_dbg("unsupported property %d\n", psp);
 		return -ENODATA;
 	}
 
+	if (sd->prop_length) {
+		memcpy(sd->buf, val->arrayval, sd->prop_length);
+		sd->was_read = true;
+	}
 	return 0;
 }
 
@@ -1262,7 +1303,7 @@ static int verify_set_property(struct power_supply *psy,
 		auth_BDCONST   = val->intval;
 		break;
 	default:
-		ds_err("unsupported property %d\n", prop);
+		ds_dbg("unsupported property %d\n", prop);
 		return -ENODATA;
 	}
 

@@ -1446,7 +1446,6 @@ static int smblib_canncel_recheck(void)
 	return rc;
 }
 
-
 #ifdef CONFIG_USB_CONFIGFS_UEVENT
 static void android_work(struct work_struct *data)
 {
@@ -1476,14 +1475,14 @@ static void android_work(struct work_struct *data)
 	if (status[0]) {
 		kobject_uevent_env(&gi->dev->kobj,
 					KOBJ_CHANGE, connected);
-		pr_err("%s: sent uevent %s\n", __func__, connected[0]);
+		pr_info("%s: sent uevent %s\n", __func__, connected[0]);
 		uevent_sent = true;
 	}
 
 	if (status[1]) {
 		kobject_uevent_env(&gi->dev->kobj,
 					KOBJ_CHANGE, configured);
-		pr_err("%s: sent uevent %s\n", __func__, configured[0]);
+		pr_info("%s: sent uevent %s\n", __func__, configured[0]);
 		smblib_canncel_recheck();
 		uevent_sent = true;
 	}
@@ -1491,12 +1490,12 @@ static void android_work(struct work_struct *data)
 	if (status[2]) {
 		kobject_uevent_env(&gi->dev->kobj,
 					KOBJ_CHANGE, disconnected);
-		pr_err("%s: sent uevent %s\n", __func__, disconnected[0]);
+		pr_info("%s: sent uevent %s\n", __func__, disconnected[0]);
 		uevent_sent = true;
 	}
 
 	if (!uevent_sent) {
-		pr_err("%s: did not send uevent (%d %d %pK)\n", __func__,
+		pr_info("%s: did not send uevent (%d %d %pK)\n", __func__,
 			gi->connected, gi->sw_connected, cdev->config);
 	}
 }

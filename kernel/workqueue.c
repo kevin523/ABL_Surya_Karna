@@ -1413,9 +1413,6 @@ static void __queue_work(int cpu, struct workqueue_struct *wq,
 	if (unlikely(wq->flags & __WQ_DRAINING) &&
 	    WARN_ON_ONCE(!is_chained_work(wq)))
 		return;
-
-	if (req_cpu == WORK_CPU_UNBOUND)
-		cpu = wq_select_unbound_cpu(0);
 retry:
 	/* pwq which will be used unless @work is executing elsewhere */
 	if (wq->flags & WQ_UNBOUND) {
@@ -1566,7 +1563,7 @@ static void __queue_delayed_work(int cpu, struct workqueue_struct *wq,
 	if (unlikely(cpu != WORK_CPU_UNBOUND))
 		add_timer_on(timer, cpu);
 	else
-		add_timer_on(timer, 0);
+		add_timer(timer);
 }
 
 /**
@@ -3208,7 +3205,6 @@ void free_workqueue_attrs(struct workqueue_attrs *attrs)
 struct workqueue_attrs *alloc_workqueue_attrs(gfp_t gfp_mask)
 {
 	struct workqueue_attrs *attrs;
-	const unsigned long allowed_cpus = 0x3f;
 
 	attrs = kzalloc(sizeof(*attrs), gfp_mask);
 	if (!attrs)
@@ -3216,7 +3212,7 @@ struct workqueue_attrs *alloc_workqueue_attrs(gfp_t gfp_mask)
 	if (!alloc_cpumask_var(&attrs->cpumask, gfp_mask))
 		goto fail;
 
-	cpumask_copy(attrs->cpumask, to_cpumask(&allowed_cpus));
+	cpumask_copy(attrs->cpumask, cpu_possible_mask);
 	return attrs;
 fail:
 	free_workqueue_attrs(attrs);
@@ -4309,7 +4305,7 @@ bool workqueue_congested(int cpu, struct workqueue_struct *wq)
 	rcu_read_lock_sched();
 
 	if (cpu == WORK_CPU_UNBOUND)
-		cpu = 0;
+		cpu = smp_processor_id();
 
 	if (!(wq->flags & WQ_UNBOUND))
 		pwq = per_cpu_ptr(wq->cpu_pwqs, cpu);
@@ -5068,6 +5064,10 @@ int workqueue_set_unbound_cpumask(cpumask_var_t cpumask)
 	if (!zalloc_cpumask_var(&saved_cpumask, GFP_KERNEL))
 		return -ENOMEM;
 
+	/*
+	 * Not excluding isolated cpus on purpose.
+	 * If the user wishes to include them, we allow that.
+	 */
 	cpumask_and(cpumask, cpumask, cpu_possible_mask);
 	if (!cpumask_empty(cpumask)) {
 		apply_wqattrs_lock();
@@ -5667,7 +5667,7 @@ int __init workqueue_init_early(void)
 	WARN_ON(__alignof__(struct pool_workqueue) < __alignof__(long long));
 
 	BUG_ON(!alloc_cpumask_var(&wq_unbound_cpumask, GFP_KERNEL));
-	cpumask_copy(wq_unbound_cpumask, cpu_possible_mask);
+	cpumask_andnot(wq_unbound_cpumask, cpu_possible_mask, cpu_isolated_map);
 
 	pwq_cache = KMEM_CACHE(pool_workqueue, SLAB_PANIC);
 

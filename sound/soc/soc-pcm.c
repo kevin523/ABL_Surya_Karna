@@ -2,7 +2,7 @@
  * soc-pcm.c  --  ALSA SoC PCM
  *
  * Copyright 2005 Wolfson Microelectronics PLC.
- * Copyright (C) 2020 XiaoMi, Inc.
+ * Copyright 2005 Openedhand Ltd.
  * Copyright (C) 2010 Slimlogic Ltd.
  * Copyright (C) 2010 Texas Instruments Inc.
  *
@@ -2366,6 +2366,7 @@ static int dpcm_fe_dai_do_trigger(struct snd_pcm_substream *substream, int cmd)
 		case SNDRV_PCM_TRIGGER_START:
 		case SNDRV_PCM_TRIGGER_RESUME:
 		case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
+		case SNDRV_PCM_TRIGGER_DRAIN:
 			ret = dpcm_dai_trigger_fe_be(substream, cmd, true);
 			break;
 		case SNDRV_PCM_TRIGGER_STOP:
@@ -2383,6 +2384,7 @@ static int dpcm_fe_dai_do_trigger(struct snd_pcm_substream *substream, int cmd)
 		case SNDRV_PCM_TRIGGER_START:
 		case SNDRV_PCM_TRIGGER_RESUME:
 		case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
+		case SNDRV_PCM_TRIGGER_DRAIN:
 			ret = dpcm_dai_trigger_fe_be(substream, cmd, false);
 			break;
 		case SNDRV_PCM_TRIGGER_STOP:

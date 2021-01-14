@@ -1,4 +1,25 @@
 # SPDX-License-Identifier: GPL-2.0
+ifeq ($(CONFIG_ARCH_SDMMAGPIE),y)
+
+ifeq ($(CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE),y)
+dtb-$(CONFIG_ARCH_SDMMAGPIE) += sdmmagpie-idp.dtb
+
+ifeq ($(CONFIG_BUILD_ARM64_DT_OVERLAY),y)
+#sdmmagpie-idp-overlay.dtbo-base := sdmmagpie-idp.dtb
+#dtbo-$(CONFIG_ARCH_SDMMAGPIE) += sdmmagpie-idp-overlay.dtbo
+endif
+
+endif
+
+else
+dtb-$(CONFIG_ARCH_QCOM)	+= apq8016-sbc.dtb
+dtb-$(CONFIG_ARCH_QCOM)	+= apq8096-db820c.dtb
+dtb-$(CONFIG_ARCH_QCOM)	+= ipq8074-hk01.dtb
+dtb-$(CONFIG_ARCH_QCOM)	+= msm8916-mtp.dtb
+dtb-$(CONFIG_ARCH_QCOM)	+= msm8992-bullhead-rev-101.dtb
+dtb-$(CONFIG_ARCH_QCOM)	+= msm8994-angler-rev-101.dtb
+dtb-$(CONFIG_ARCH_QCOM)	+= msm8996-mtp.dtb
+
 dtb-$(CONFIG_ARCH_QCS403) += qcs403-iot-sku1.dtb \
 			qcs403-iot-sku2.dtb \
 			qcs403-iot-sku3.dtb \
@@ -49,6 +70,8 @@ ifeq ($(CONFIG_BUILD_ARM64_DT_OVERLAY),y)
 		sm8150-sdxprairie-v3-mtp-overlay.dtbo \
 		sm8150-marmot-cdp-overlay.dtbo \
 		sm8150-marmot-mtp-overlay.dtbo \
+		sm8150-lemur-cdp-overlay.dtbo \
+		sm8150-lemur-mtp-overlay.dtbo \
 		sm8150-hdk-overlay.dtbo
 
 sm8150-cdp-overlay.dtbo-base := sm8150.dtb sm8150-v2.dtb sm8150p.dtb sm8150p-v2.dtb
@@ -74,6 +97,8 @@ sm8150-sdxprairie-v2-mtp-overlay.dtbo-base := sm8150.dtb sm8150-v2.dtb sm8150p.d
 sm8150-sdxprairie-v3-mtp-overlay.dtbo-base := sm8150.dtb sm8150-v2.dtb sm8150p.dtb sm8150p-v2.dtb
 sm8150-marmot-cdp-overlay.dtbo-base := sm8150.dtb sm8150-v2.dtb sm8150p.dtb sm8150p-v2.dtb
 sm8150-marmot-mtp-overlay.dtbo-base := sm8150.dtb sm8150-v2.dtb sm8150p.dtb sm8150p-v2.dtb
+sm8150-lemur-cdp-overlay.dtbo-base := sm8150.dtb sm8150-v2.dtb sm8150p.dtb sm8150p-v2.dtb
+sm8150-lemur-mtp-overlay.dtbo-base := sm8150.dtb sm8150-v2.dtb sm8150p.dtb sm8150p-v2.dtb
 else
 dtb-$(CONFIG_ARCH_SM8150)	+= sm8150-rumi.dtb \
 	sm8150-mtp.dtb \
@@ -144,7 +169,12 @@ ifeq ($(CONFIG_BUILD_ARM64_DT_OVERLAY),y)
 		sa6155p-v2-adp-star-overlay.dtbo \
 		sa6155p-v2-adp-air-overlay.dtbo \
 		qcs610-iot-overlay.dtbo \
-		qcs410-iot-overlay.dtbo
+		qcs410-iot-overlay.dtbo \
+		prairie-iot-idp-overlay.dtbo \
+		prairie-iot-external-codec-idp-overlay.dtbo \
+		prairie-iot-usbc-idp-overlay.dtbo \
+		prairie-iot-cmd-mone-display-idp-overlay.dtbo \
+		prairie-iot-usbc-minidp-idp-overlay.dtbo
 
 sm6150-rumi-overlay.dtbo-base := sm6150.dtb
 sm6150-qrd-overlay.dtbo-base := sm6150.dtb
@@ -160,9 +190,15 @@ sa6155p-adp-star-overlay.dtbo-base := sa6155p.dtb
 sa6155p-v2-adp-star-overlay.dtbo-base := sa6155p.dtb
 sa6155-adp-air-overlay.dtbo-base := sa6155.dtb
 sa6155p-adp-air-overlay.dtbo-base := sa6155p.dtb
+qcs610-ipc-overlay.dtbo-base := qcs610.dtb
 sa6155p-v2-adp-air-overlay.dtbo-base := sa6155p.dtb
-qcs610-iot-overlay.dtbo-base := sm6150.dtb
-qcs410-iot-overlay.dtbo-base := sm6150.dtb
+prairie-iot-idp-overlay.dtbo-base := qcs610.dtb
+prairie-iot-external-codec-idp-overlay.dtbo-base := qcs610.dtb
+prairie-iot-usbc-idp-overlay.dtbo-base := qcs610.dtb
+prairie-iot-cmd-mode-display-idp-overlay.dtbo-base := qcs610.dtb
+prairie-iot-usbc-minidp-idp-overlay.dtbo-base := qcs610.dtb
+qcs610-iot-overlay.dtbo-base := qcs610.dtb
+qcs410-iot-overlay.dtbo-base := qcs410.dtb
 else
 dtb-$(CONFIG_ARCH_SM6150)	+= sm6150-rumi.dtb \
 	sm6150-qrd.dtb \
@@ -180,15 +216,38 @@ dtb-$(CONFIG_ARCH_SM6150)	+= sm6150-rumi.dtb \
 	sa6155p-v2-adp-star.dtb \
 	sa6155p-v2-adp-air.dtb \
 	qcs610-iot.dtb \
-	qcs410-iot.dtb
+	qcs410-iot.dtb \
+	prairie-iot-idp.dtb \
+	prairie-iot-external-codec-idp.dtb \
+	prairie-iot-usbc-idp.dtb \
+	prairie-iot-cmd-mode-display-idp.dtb \
+	prairie-iot-usbc-minidp-idp.dtb
 
 endif
 
 ifeq ($(CONFIG_BUILD_ARM64_DT_OVERLAY),y)
 	dtbo-$(CONFIG_ARCH_SDMMAGPIE) += \
-		sdmmagpie-idp-overlay.dtbo
+		sdmmagpie-idp-overlay.dtbo \
+		sdmmagpie-atp-overlay.dtbo \
+		sdmmagpie-rumi-overlay.dtbo \
+		sdmmagpie-qrd-overlay.dtbo \
+		sdmmagpiep-idp-overlay.dtbo \
+		sdmmagpiep-atp-overlay.dtbo \
+		sdmmagpiep-qrd-overlay.dtbo \
+		sdmmagpie-external-codec-idp-overlay.dtbo \
+		sdmmagpie-usbc-idp-overlay.dtbo \
+		sdmmagpie-dual-display-idp-overlay.dtbo
 
 sdmmagpie-idp-overlay.dtbo-base := sdmmagpie.dtb
+sdmmagpie-atp-overlay.dtbo-base := sdmmagpie.dtb
+sdmmagpie-rumi-overlay.dtbo-base := sdmmagpie.dtb
+sdmmagpie-qrd-overlay.dtbo-base := sdmmagpie.dtb
+sdmmagpiep-idp-overlay.dtbo-base := sdmmagpiep.dtb
+sdmmagpiep-atp-overlay.dtbo-base := sdmmagpiep.dtb
+sdmmagpiep-qrd-overlay.dtbo-base := sdmmagpiep.dtb
+sdmmagpie-external-codec-idp-overlay.dtbo-base := sdmmagpie.dtb
+sdmmagpie-usbc-idp-overlay.dtbo-base := sdmmagpie.dtb
+sdmmagpie-dual-display-idp-overlay.dtbo-base := sdmmagpie.dtb
 else
 dtb-$(CONFIG_ARCH_SDMMAGPIE)	+= sdmmagpie-rumi.dtb \
 	sdmmagpie-idp.dtb \
@@ -210,7 +269,17 @@ ifeq ($(CONFIG_BUILD_ARM64_DT_OVERLAY),y)
 		trinket-external-codec-idp-overlay.dtbo \
 		trinket-usbc-external-codec-idp-overlay.dtbo \
 		trinket-usbc-idp-overlay.dtbo \
-		trinket-dp-idp-overlay.dtbo
+		trinket-dp-idp-overlay.dtbo \
+		trinket-iot-idp-overlay.dtbo \
+		trinketp-iot-idp-overlay.dtbo \
+		trinket-iot-external-codec-idp-overlay.dtbo \
+		trinketp-iot-external-codec-idp-overlay.dtbo \
+		trinket-iot-usbc-external-codec-idp-overlay.dtbo \
+		trinketp-iot-usbc-external-codec-idp-overlay.dtbo \
+		trinket-iot-usbc-idp-overlay.dtbo \
+		trinketp-iot-usbc-idp-overlay.dtbo \
+		trinket-iot-dp-idp-overlay.dtbo \
+		trinketp-iot-dp-idp-overlay.dtbo
 
 trinket-rumi-overlay.dtbo-base := trinket.dtb
 trinket-idp-overlay.dtbo-base := trinket.dtb
@@ -219,6 +288,16 @@ trinket-external-codec-idp-overlay.dtbo-base := trinket.dtb
 trinket-usbc-external-codec-idp-overlay.dtbo-base := trinket.dtb
 trinket-usbc-idp-overlay.dtbo-base := trinket.dtb
 trinket-dp-idp-overlay.dtbo-base := trinket.dtb
+trinket-iot-idp-overlay.dtbo-base := trinket-iot.dtb
+trinketp-iot-idp-overlay.dtbo-base := trinketp-iot.dtb
+trinket-iot-external-codec-idp-overlay.dtbo-base := trinket-iot.dtb
+trinketp-iot-external-codec-idp-overlay.dtbo-base := trinketp-iot.dtb
+trinket-iot-usbc-external-codec-idp-overlay.dtbo-base := trinket-iot.dtb
+trinketp-iot-usbc-external-codec-idp-overlay.dtbo-base := trinketp-iot.dtb
+trinket-iot-usbc-idp-overlay.dtbo-base := trinket-iot.dtb
+trinketp-iot-usbc-idp-overlay.dtbo-base := trinketp-iot.dtb
+trinket-iot-dp-idp-overlay.dtbo-base := trinket-iot.dtb
+trinketp-iot-dp-idp-overlay.dtbo-base := trinketp-iot.dtb
 else
 dtb-$(CONFIG_ARCH_TRINKET)	+= trinket-rumi.dtb \
 	trinket-idp.dtb \
@@ -226,7 +305,17 @@ dtb-$(CONFIG_ARCH_TRINKET)	+= trinket-rumi.dtb \
 	trinket-external-codec-idp.dtb \
 	trinket-usbc-external-codec-idp.dtb \
 	trinket-usbc-idp.dtb \
-	trinket-dp-idp.dtb
+	trinket-dp-idp.dtb \
+	trinket-iot-idp.dtb \
+	trinketp-iot-idp.dtb \
+	trinket-iot-external-codec-idp.dtb \
+	trinketp-iot-external-codec-idp.dtb \
+	trinket-iot-usbc-external-codec-idp.dtb \
+	trinketp-iot-usbc-external-codec-idp.dtb \
+	trinket-iot-usbc-idp.dtb \
+	trinketp-iot-usbc-idp.dtb \
+	trinket-iot-dp-idp.dtb \
+	trinketp-iot-dp-idp.dtb
 endif
 
 ifeq ($(CONFIG_BUILD_ARM64_DT_OVERLAY),y)
@@ -293,9 +382,9 @@ dtb-$(CONFIG_ARCH_SDXPRAIRIE) += sdxprairie-rumi.dtb \
 	sdxprairie-v2-mtp-v1.1.dtb \
 	sdxprairie-v2-mtp-v1.1-cpe.dtb \
 	sdxprairie-v2-pcie-ep-mtp.dtb \
-	sa515m-ccard.dtb \
-	sa515m-ccard-pcie-ep.dtb \
-	sa515m-ccard-usb-ep.dtb
+	sdxprairie-v2-makena-pcie-ep-mtp.dtb
+
+endif
 
 ifeq ($(CONFIG_ARM64),y)
 always		:= $(dtb-y)

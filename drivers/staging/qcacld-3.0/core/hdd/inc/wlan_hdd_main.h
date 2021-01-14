@@ -47,6 +47,9 @@
 #include <linux/netdevice.h>
 #include <linux/skbuff.h>
 #include <net/cfg80211.h>
+#ifdef CLD_PM_QOS
+#include <linux/pm_qos.h>
+#endif
 #include <linux/ieee80211.h>
 #include <qdf_list.h>
 #include <qdf_types.h>
@@ -134,6 +137,29 @@ struct hdd_apf_context {
 #else
 #define NUM_TX_QUEUES 4
 #endif
+
+/* HDD_IS_RATE_LIMIT_REQ: Macro helper to implement rate limiting
+ * @flag: The flag to determine if limiting is required or not
+ * @rate: The number of seconds within which if multiple commands come, the
+ *	  flag will be set to true
+ *
+ * If the function in which this macro is used is called multiple times within
+ * "rate" number of seconds, the "flag" will be set to true which can be used
+ * to reject/take appropriate action.
+ */
+#define HDD_IS_RATE_LIMIT_REQ(flag, rate)\
+	do {\
+		static ulong __last_ticks;\
+		ulong __ticks = jiffies;\
+		flag = false; \
+		if (!time_after(__ticks,\
+			__last_ticks + rate * HZ)) {\
+			flag = true; \
+		} \
+		else { \
+			__last_ticks = __ticks;\
+			} \
+	} while (0)
 
 /*
  * API in_compat_syscall() is introduced in 4.6 kernel to check whether we're
@@ -324,6 +350,8 @@ enum hdd_driver_flags {
 
 #define WLAN_CHIP_VERSION   "WCNSS"
 
+#ifdef WLAN_DEBUG
+
 #define hdd_alert(params...) QDF_TRACE_FATAL(QDF_MODULE_ID_HDD, params)
 #define hdd_err(params...) QDF_TRACE_ERROR(QDF_MODULE_ID_HDD, params)
 #define hdd_warn(params...) QDF_TRACE_WARN(QDF_MODULE_ID_HDD, params)
@@ -350,6 +378,36 @@ enum hdd_driver_flags {
 #define hdd_enter() hdd_debug("enter")
 #define hdd_enter_dev(dev) hdd_debug("enter(%s)", (dev)->name)
 #define hdd_exit() hdd_debug("exit")
+
+#else /* WLAN_DEBUG */
+
+/* Needed to avoid problems caused by disabling debug
+ * but different stuff still being passed to these loggers */
+#define noop ({ do { } while (0); })
+
+#define hdd_alert(params...) noop
+#define hdd_err(params...) noop
+#define hdd_warn(params...) noop
+#define hdd_info(params...) noop
+#define hdd_debug(params...) noop
+
+#define hdd_nofl_alert(params...) noop
+#define hdd_nofl_err(params...) noop
+#define hdd_nofl_warn(params...) noop
+#define hdd_nofl_info(params...) noop
+#define hdd_nofl_debug(params...) noop
+
+#define hdd_alert_rl(params...) noop
+#define hdd_err_rl(params...) noop
+#define hdd_warn_rl(params...) noop
+#define hdd_info_rl(params...) noop
+#define hdd_debug_rl(params...) noop
+
+#define hdd_enter() noop
+#define hdd_enter_dev(dev) noop
+#define hdd_exit() noop
+
+#endif /* WLAN_DEBUG */
 
 #define WLAN_HDD_GET_PRIV_PTR(__dev__) \
 		(struct hdd_adapter *)(netdev_priv((__dev__)))
@@ -1516,6 +1574,11 @@ struct hdd_adapter {
 	qdf_mutex_t sta_periodic_stats_lock;
 #endif /* WLAN_FEATURE_PERIODIC_STA_STATS */
 	qdf_event_t peer_cleanup_done;
+#ifdef FEATURE_OEM_DATA
+	bool oem_data_in_progress;
+	void *cookie;
+	bool response_expected;
+#endif
 };
 
 #define WLAN_HDD_GET_STATION_CTX_PTR(adapter) (&(adapter)->session.station)
@@ -1867,7 +1930,6 @@ struct hdd_context {
 	/** P2P Device MAC Address for the adapter  */
 	struct qdf_mac_addr p2p_device_address;
 
-	qdf_wake_lock_t rx_wake_lock;
 	qdf_wake_lock_t sap_wake_lock;
 
 	void *hdd_ipa;
@@ -1997,6 +2059,7 @@ struct hdd_context {
 	int radio_index;
 	qdf_work_t sap_pre_cac_work;
 	bool hbw_requested;
+	bool llm_enabled;
 	uint32_t last_nil_scan_bug_report_timestamp;
 	enum RX_OFFLOAD ol_enable;
 #ifdef WLAN_FEATURE_NAN_DATAPATH
@@ -2103,6 +2166,11 @@ struct hdd_context {
 	qdf_atomic_t sar_safety_req_resp_event_in_progress;
 #endif
 	bool roam_ch_from_fw_supported;
+
+#ifdef CLD_PM_QOS
+	struct pm_qos_request pm_qos_req;
+#endif
+	bool ll_stats_per_chan_rx_tx_time;
 };
 
 /**
@@ -2729,6 +2797,7 @@ void hdd_deinit(void);
 int hdd_wlan_startup(struct device *dev);
 void __hdd_wlan_exit(void);
 int hdd_wlan_notify_modem_power_state(int state);
+void hdd_context_destroy(struct hdd_context *hdd_ctx);
 #ifdef QCA_HT_2040_COEX
 /**
  * hdd_wlan_set_ht2040_mode() - notify FW with HT20/HT40 mode
@@ -4098,4 +4167,44 @@ void wlan_hdd_del_monitor(struct hdd_context *hdd_ctx,
 {
 }
 #endif /* WLAN_FEATURE_PKT_CAPTURE */
+
+/**
+ * hdd_send_update_owe_info_event - Send update OWE info event
+ * @adapter: Pointer to adapter
+ * @sta_addr: MAC address of peer STA
+ * @owe_ie: OWE IE
+ * @owe_ie_len: Length of OWE IE
+ *
+ * Send update OWE info event to hostapd
+ *
+ * Return: none
+ */
+#ifdef CFG80211_EXTERNAL_DH_UPDATE_SUPPORT
+void hdd_send_update_owe_info_event(struct hdd_adapter *adapter,
+				    uint8_t sta_addr[],
+				    uint8_t *owe_ie,
+				    uint32_t owe_ie_len);
+#else
+static inline void hdd_send_update_owe_info_event(struct hdd_adapter *adapter,
+						  uint8_t sta_addr[],
+						  uint8_t *owe_ie,
+						  uint32_t owe_ie_len)
+{
+}
+#endif
+
+#if defined(CLD_PM_QOS) && defined(WLAN_FEATURE_LL_MODE)
+/**
+ * hdd_beacon_latency_event_cb() - Callback function to get latency level
+ * @latency_level: latency level received from firmware
+ *
+ * Return: None
+ */
+void hdd_beacon_latency_event_cb(uint32_t latency_level);
+#else
+static inline void hdd_beacon_latency_event_cb(uint32_t latency_level)
+{
+}
+#endif
+
 #endif /* end #if !defined(WLAN_HDD_MAIN_H) */

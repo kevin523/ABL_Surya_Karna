@@ -50,8 +50,8 @@ int sysctl_tcp_retrans_collapse __read_mostly = 1;
  */
 int sysctl_tcp_workaround_signed_windows __read_mostly = 0;
 
-/* Default TSQ limit of 16 TSO segments */
-int sysctl_tcp_limit_output_bytes __read_mostly = 16 * 65536;
+/* Default TSQ limit of four TSO segments */
+int sysctl_tcp_limit_output_bytes __read_mostly = 262144;
 
 /* This limits the percentage of the congestion window which we
  * will allow a single TSO frame to consume.  Building TSO frames
@@ -165,16 +165,13 @@ static void tcp_event_data_sent(struct tcp_sock *tp,
 	if (tcp_packets_in_flight(tp) == 0)
 		tcp_ca_event(sk, CA_EVENT_TX_START);
 
-	/* If this is the first data packet sent in response to the
-	 * previous received data,
-	 * and it is a reply for ato after last received packet,
-	 * increase pingpong count.
-	 */
-	if (before(tp->lsndtime, icsk->icsk_ack.lrcvtime) &&
-	    (u32)(now - icsk->icsk_ack.lrcvtime) < icsk->icsk_ack.ato)
-		inet_csk_inc_pingpong_cnt(sk);
-
 	tp->lsndtime = now;
+
+	/* If it is a reply for ato after last received
+	 * packet, enter pingpong mode.
+	 */
+	if ((u32)(now - icsk->icsk_ack.lrcvtime) < icsk->icsk_ack.ato)
+		icsk->icsk_ack.pingpong = 1;
 }
 
 /* Account for an ACK we sent. */
@@ -937,12 +934,12 @@ enum hrtimer_restart tcp_pace_kick(struct hrtimer *timer)
 static void tcp_internal_pacing(struct sock *sk, const struct sk_buff *skb)
 {
 	u64 len_ns;
-	unsigned long rate;
+	u32 rate;
 
 	if (!tcp_needs_internal_pacing(sk))
 		return;
 	rate = sk->sk_pacing_rate;
-	if (!rate || rate == ~0UL)
+	if (!rate || rate == ~0U)
 		return;
 
 	len_ns = (u64)skb->len * NSEC_PER_SEC;
@@ -1589,7 +1586,8 @@ static void tcp_cwnd_validate(struct sock *sk, bool is_cwnd_limited)
 	 * window, and remember whether we were cwnd-limited then.
 	 */
 	if (!before(tp->snd_una, tp->max_packets_seq) ||
-	    tp->packets_out > tp->max_packets_out) {
+	    tp->packets_out > tp->max_packets_out ||
+	    is_cwnd_limited) {
 		tp->max_packets_out = tp->packets_out;
 		tp->max_packets_seq = tp->snd_nxt;
 		tp->is_cwnd_limited = is_cwnd_limited;
@@ -1668,9 +1666,8 @@ static u32 tcp_tso_autosize(const struct sock *sk, unsigned int mss_now,
 {
 	u32 bytes, segs;
 
-	bytes = min_t(unsigned long,
-		      sk->sk_pacing_rate >> READ_ONCE(sk->sk_pacing_shift),
-		      sk->sk_gso_max_size - 1 - MAX_TCP_HEADER);
+	bytes = min(sk->sk_pacing_rate >> sk->sk_pacing_shift,
+		    sk->sk_gso_max_size - 1 - MAX_TCP_HEADER);
 
 	/* Goal is to send at least one packet per ms,
 	 * not one big TSO packet every 100 ms.
@@ -2186,14 +2183,10 @@ static bool tcp_pacing_check(const struct sock *sk)
 static bool tcp_small_queue_check(struct sock *sk, const struct sk_buff *skb,
 				  unsigned int factor)
 {
-	unsigned long limit;
+	unsigned int limit;
 
-	limit = max_t(unsigned long,
-		      2 * skb->truesize,
-		      sk->sk_pacing_rate >> READ_ONCE(sk->sk_pacing_shift));
-	if (sk->sk_pacing_status == SK_PACING_NONE)
-		limit = min_t(unsigned long, limit,
-			      sysctl_tcp_limit_output_bytes);
+	limit = max(2 * skb->truesize, sk->sk_pacing_rate >> sk->sk_pacing_shift);
+	limit = min_t(u32, limit, sysctl_tcp_limit_output_bytes);
 	limit <<= factor;
 
 	if (refcount_read(&sk->sk_wmem_alloc) > limit) {
@@ -2386,6 +2379,10 @@ repair:
 	else
 		tcp_chrono_stop(sk, TCP_CHRONO_RWND_LIMITED);
 
+	is_cwnd_limited |= (tcp_packets_in_flight(tp) >= tp->snd_cwnd);
+	if (likely(sent_pkts || is_cwnd_limited))
+		tcp_cwnd_validate(sk, is_cwnd_limited);
+
 	if (likely(sent_pkts)) {
 		if (tcp_in_cwnd_reduction(sk))
 			tp->prr_out += sent_pkts;
@@ -2393,8 +2390,6 @@ repair:
 		/* Send one loss probe per tail loss episode. */
 		if (push_one != 2)
 			tcp_schedule_loss_probe(sk, false);
-		is_cwnd_limited |= (tcp_packets_in_flight(tp) >= tp->snd_cwnd);
-		tcp_cwnd_validate(sk, is_cwnd_limited);
 		return false;
 	}
 	return !tp->packets_out && tcp_send_head(sk);
@@ -2413,15 +2408,12 @@ bool tcp_schedule_loss_probe(struct sock *sk, bool advancing_rto)
 		return false;
 
 	/* Schedule a loss probe in 2*RTT for SACK capable connections
-	 * in Open state, that are either limited by cwnd or application.
+	 * not in loss recovery, that are either limited by cwnd or application.
 	 */
 	if ((sysctl_tcp_early_retrans != 3 && sysctl_tcp_early_retrans != 4) ||
 	    !tp->packets_out || !tcp_is_sack(tp) ||
-	    icsk->icsk_ca_state != TCP_CA_Open)
-		return false;
-
-	if ((tp->snd_cwnd > tcp_packets_in_flight(tp)) &&
-	     tcp_send_head(sk))
+	    (icsk->icsk_ca_state != TCP_CA_Open &&
+	     icsk->icsk_ca_state != TCP_CA_CWR))
 		return false;
 
 	/* Probe timeout is 2*rtt. Add minimum RTO to account
@@ -3540,7 +3532,7 @@ void tcp_send_delayed_ack(struct sock *sk)
 		const struct tcp_sock *tp = tcp_sk(sk);
 		int max_ato = HZ / 2;
 
-		if (inet_csk_in_pingpong_mode(sk) ||
+		if (icsk->icsk_ack.pingpong ||
 		    (icsk->icsk_ack.pending & ICSK_ACK_PUSHED))
 			max_ato = TCP_DELACK_MAX;
 

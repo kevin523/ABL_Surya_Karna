@@ -1160,6 +1160,17 @@ int ipa_get_flt_rt_stats(struct ipa_ioc_flt_rt_query *query)
 	return __ipa_get_flt_rt_stats(query);
 }
 
+int ipa_drop_stats_init(void)
+{
+	u32 pipe_bitmask = 0;
+
+	/* Always enable drop stats for USB CONS and DPL Pipe. */
+	pipe_bitmask |= IPA_CLIENT_BIT_32(IPA_CLIENT_USB_CONS) |
+			IPA_CLIENT_BIT_32(IPA_CLIENT_USB_DPL_CONS);
+
+	return ipa_init_drop_stats(pipe_bitmask);
+}
+
 int ipa_init_drop_stats(u32 pipe_bitmask)
 {
 	struct ipahal_stats_init_pyld *pyld;
@@ -1459,7 +1470,7 @@ static ssize_t ipa_debugfs_reset_quota_stats(struct file *file,
 	int ret;
 
 	mutex_lock(&ipa3_ctx->lock);
-	if (sizeof(dbg_buff) < count + 1) {
+	if (sizeof(dbg_buff) < count) {
 		ret = -EFAULT;
 		goto bail;
 	}
@@ -1558,7 +1569,7 @@ static ssize_t ipa_debugfs_reset_tethering_stats(struct file *file,
 	int ret;
 
 	mutex_lock(&ipa3_ctx->lock);
-	if (sizeof(dbg_buff) < count + 1) {
+	if (sizeof(dbg_buff) < count) {
 		ret = -EFAULT;
 		goto bail;
 	}
@@ -1692,7 +1703,7 @@ static ssize_t ipa_debugfs_control_flt_rt_stats(struct file *file,
 	}
 
 	mutex_lock(&ipa3_ctx->lock);
-	if (sizeof(dbg_buff) < count + 1) {
+	if (sizeof(dbg_buff) < count) {
 		ret = -EFAULT;
 		goto bail;
 	}
@@ -1793,7 +1804,7 @@ static ssize_t ipa_debugfs_reset_drop_stats(struct file *file,
 	int ret;
 
 	mutex_lock(&ipa3_ctx->lock);
-	if (sizeof(dbg_buff) < count + 1) {
+	if (sizeof(dbg_buff) < count) {
 		ret = -EFAULT;
 		goto bail;
 	}

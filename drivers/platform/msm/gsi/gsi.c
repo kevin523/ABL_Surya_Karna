@@ -27,6 +27,7 @@
 #define GSI_CMD_POLL_CNT 5
 #define GSI_STOP_CMD_TIMEOUT_MS 200
 #define GSI_MAX_CH_LOW_WEIGHT 15
+#define GSI_IRQ_STORM_THR 5
 
 #define GSI_STOP_CMD_POLL_CNT 4
 #define GSI_STOP_IN_PROC_CMD_POLL_CNT 2
@@ -565,7 +566,6 @@ static void gsi_process_chan(struct gsi_xfer_compl_evt *evt,
 	if (callback) {
 		if (atomic_read(&ch_ctx->poll_mode)) {
 			GSIERR("Calling client callback in polling mode\n");
-			WARN_ON(1);
 		}
 		ch_ctx->props.xfer_cb(notify);
 	}
@@ -759,6 +759,8 @@ static void gsi_handle_irq(void)
 	unsigned long cnt = 0;
 
 	while (1) {
+		if (!gsi_ctx->per.clk_status_cb())
+			break;
 		type = gsi_readl(gsi_ctx->base +
 			GSI_EE_n_CNTXT_TYPE_IRQ_OFFS(ee));
 
@@ -811,8 +813,13 @@ static irqreturn_t gsi_isr(int irq, void *ctxt)
 			gsi_ctx->per.rel_clk_cb(gsi_ctx->per.user_data);
 		}
 	} else if (!gsi_ctx->per.clk_status_cb()) {
+		if (atomic_read(&gsi_ctx->num_unclock_irq) ==
+			GSI_IRQ_STORM_THR)
+			gsi_ctx->per.enable_clk_bug_on();
+			atomic_inc(&gsi_ctx->num_unclock_irq);
 		return IRQ_HANDLED;
 	} else {
+		atomic_set(&gsi_ctx->num_unclock_irq, 0);
 		gsi_handle_irq();
 	}
 	return IRQ_HANDLED;
@@ -1303,6 +1310,7 @@ int gsi_register_device(struct gsi_per_props *props, unsigned long *dev_hdl)
 		}
 	}
 
+
 	*dev_hdl = (uintptr_t)gsi_ctx;
 
 	return GSI_STATUS_SUCCESS;
@@ -1738,7 +1746,7 @@ int gsi_alloc_evt_ring(struct gsi_evt_ring_props *props, unsigned long dev_hdl,
 EXPORT_SYMBOL(gsi_alloc_evt_ring);
 
 static void __gsi_write_evt_ring_scratch(unsigned long evt_ring_hdl,
-		union __packed gsi_evt_scratch val)
+		union gsi_evt_scratch val)
 {
 	gsi_writel(val.data.word1, gsi_ctx->base +
 		GSI_EE_n_EV_CH_k_SCRATCH_0_OFFS(evt_ring_hdl,
@@ -1749,7 +1757,7 @@ static void __gsi_write_evt_ring_scratch(unsigned long evt_ring_hdl,
 }
 
 int gsi_write_evt_ring_scratch(unsigned long evt_ring_hdl,
-		union __packed gsi_evt_scratch val)
+		union gsi_evt_scratch val)
 {
 	struct gsi_evt_ctx *ctx;
 
@@ -2166,6 +2174,8 @@ static void gsi_program_chan_ctx(struct gsi_chan_props *props, unsigned int ee,
 		break;
 	case GSI_CHAN_PROT_AQC:
 	case GSI_CHAN_PROT_11AD:
+	case GSI_CHAN_PROT_QDSS:
+	case GSI_CHAN_PROT_RTK:
 		prot_msb = 1;
 		break;
 	default:
@@ -2495,7 +2505,7 @@ static int gsi_alloc_ap_channel(unsigned int chan_hdl)
 }
 
 static void __gsi_write_channel_scratch(unsigned long chan_hdl,
-		union __packed gsi_channel_scratch val)
+		union gsi_channel_scratch val)
 {
 	gsi_writel(val.data.word1, gsi_ctx->base +
 		GSI_EE_n_GSI_CH_k_SCRATCH_0_OFFS(chan_hdl,
@@ -2522,7 +2532,7 @@ static void __gsi_write_wdi3_channel_scratch2_reg(unsigned long chan_hdl,
 
 
 int gsi_write_channel_scratch3_reg(unsigned long chan_hdl,
-		union __packed gsi_wdi_channel_scratch3_reg val)
+		union gsi_wdi_channel_scratch3_reg val)
 {
 	struct gsi_chan_ctx *ctx;
 
@@ -2553,7 +2563,7 @@ int gsi_write_channel_scratch3_reg(unsigned long chan_hdl,
 EXPORT_SYMBOL(gsi_write_channel_scratch3_reg);
 
 static void __gsi_read_channel_scratch(unsigned long chan_hdl,
-		union __packed gsi_channel_scratch * val)
+		union gsi_channel_scratch * val)
 {
 	val->data.word1 = gsi_readl(gsi_ctx->base +
 		GSI_EE_n_GSI_CH_k_SCRATCH_0_OFFS(chan_hdl,
@@ -2583,10 +2593,10 @@ static void __gsi_read_wdi3_channel_scratch2_reg(unsigned long chan_hdl,
 }
 
 
-static union __packed gsi_channel_scratch __gsi_update_mhi_channel_scratch(
+static union gsi_channel_scratch __gsi_update_mhi_channel_scratch(
 	unsigned long chan_hdl, struct __packed gsi_mhi_channel_scratch mscr)
 {
-	union __packed gsi_channel_scratch scr;
+	union gsi_channel_scratch scr;
 
 	/* below sequence is not atomic. assumption is sequencer specific fields
 	 * will remain unchanged across this sequence
@@ -2610,12 +2620,7 @@ static union __packed gsi_channel_scratch __gsi_update_mhi_channel_scratch(
 			gsi_ctx->per.ee));
 
 	/* UPDATE */
-	scr.mhi.mhi_host_wp_addr = mscr.mhi_host_wp_addr;
-	scr.mhi.assert_bit40 = mscr.assert_bit40;
-	scr.mhi.polling_configuration = mscr.polling_configuration;
-	scr.mhi.burst_mode_enabled = mscr.burst_mode_enabled;
 	scr.mhi.polling_mode = mscr.polling_mode;
-	scr.mhi.oob_mod_threshold = mscr.oob_mod_threshold;
 
 	if (gsi_ctx->per.ver < GSI_VER_2_5) {
 		scr.mhi.max_outstanding_tre = mscr.max_outstanding_tre;
@@ -2643,7 +2648,7 @@ static union __packed gsi_channel_scratch __gsi_update_mhi_channel_scratch(
 }
 
 int gsi_write_channel_scratch(unsigned long chan_hdl,
-		union __packed gsi_channel_scratch val)
+		union gsi_channel_scratch val)
 {
 	struct gsi_chan_ctx *ctx;
 
@@ -2673,6 +2678,7 @@ int gsi_write_channel_scratch(unsigned long chan_hdl,
 
 	return GSI_STATUS_SUCCESS;
 }
+EXPORT_SYMBOL(gsi_write_channel_scratch);
 
 int gsi_write_wdi3_channel_scratch2_reg(unsigned long chan_hdl,
 		union __packed gsi_wdi3_channel_scratch2_reg val)
@@ -2706,9 +2712,11 @@ int gsi_write_wdi3_channel_scratch2_reg(unsigned long chan_hdl,
 
 	return GSI_STATUS_SUCCESS;
 }
+EXPORT_SYMBOL(gsi_write_wdi3_channel_scratch2_reg);
+
 
 int gsi_read_channel_scratch(unsigned long chan_hdl,
-		union __packed gsi_channel_scratch *val)
+		union gsi_channel_scratch *val)
 {
 	struct gsi_chan_ctx *ctx;
 
@@ -2738,6 +2746,7 @@ int gsi_read_channel_scratch(unsigned long chan_hdl,
 
 	return GSI_STATUS_SUCCESS;
 }
+EXPORT_SYMBOL(gsi_read_channel_scratch);
 
 int gsi_read_wdi3_channel_scratch2_reg(unsigned long chan_hdl,
 		union __packed gsi_wdi3_channel_scratch2_reg * val)
@@ -2770,9 +2779,11 @@ int gsi_read_wdi3_channel_scratch2_reg(unsigned long chan_hdl,
 
 	return GSI_STATUS_SUCCESS;
 }
+EXPORT_SYMBOL(gsi_read_wdi3_channel_scratch2_reg);
+
 
 int gsi_update_mhi_channel_scratch(unsigned long chan_hdl,
-		struct __packed gsi_mhi_channel_scratch mscr)
+		struct gsi_mhi_channel_scratch mscr)
 {
 	struct gsi_chan_ctx *ctx;
 
@@ -2801,6 +2812,7 @@ int gsi_update_mhi_channel_scratch(unsigned long chan_hdl,
 
 	return GSI_STATUS_SUCCESS;
 }
+EXPORT_SYMBOL(gsi_update_mhi_channel_scratch);
 
 int gsi_query_channel_db_addr(unsigned long chan_hdl,
 		uint32_t *db_addr_wp_lsb, uint32_t *db_addr_wp_msb)
@@ -2834,6 +2846,16 @@ int gsi_query_channel_db_addr(unsigned long chan_hdl,
 
 	return GSI_STATUS_SUCCESS;
 }
+EXPORT_SYMBOL(gsi_query_channel_db_addr);
+
+int gsi_pending_irq_type(void)
+{
+	int ee = gsi_ctx->per.ee;
+
+	return gsi_readl(gsi_ctx->base +
+		GSI_EE_n_CNTXT_TYPE_IRQ_OFFS(ee));
+}
+EXPORT_SYMBOL(gsi_pending_irq_type);
 
 int gsi_start_channel(unsigned long chan_hdl)
 {
@@ -2910,6 +2932,7 @@ int gsi_start_channel(unsigned long chan_hdl)
 
 	return GSI_STATUS_SUCCESS;
 }
+EXPORT_SYMBOL(gsi_start_channel);
 
 int gsi_stop_channel(unsigned long chan_hdl)
 {
@@ -2987,6 +3010,7 @@ free_lock:
 	mutex_unlock(&gsi_ctx->mlock);
 	return res;
 }
+EXPORT_SYMBOL(gsi_stop_channel);
 
 int gsi_stop_db_channel(unsigned long chan_hdl)
 {
@@ -3055,6 +3079,7 @@ free_lock:
 	mutex_unlock(&gsi_ctx->mlock);
 	return res;
 }
+EXPORT_SYMBOL(gsi_stop_db_channel);
 
 int gsi_reset_channel(unsigned long chan_hdl)
 {
@@ -3151,6 +3176,7 @@ revrfy_chnlstate:
 
 	return GSI_STATUS_SUCCESS;
 }
+EXPORT_SYMBOL(gsi_reset_channel);
 
 int gsi_dealloc_channel(unsigned long chan_hdl)
 {
@@ -3218,6 +3244,7 @@ int gsi_dealloc_channel(unsigned long chan_hdl)
 
 	return GSI_STATUS_SUCCESS;
 }
+EXPORT_SYMBOL(gsi_dealloc_channel);
 
 void gsi_update_ch_dp_stats(struct gsi_chan_ctx *ctx, uint16_t used)
 {
@@ -3341,6 +3368,7 @@ int gsi_query_channel_info(unsigned long chan_hdl,
 
 	return GSI_STATUS_SUCCESS;
 }
+EXPORT_SYMBOL(gsi_query_channel_info);
 
 int gsi_is_channel_empty(unsigned long chan_hdl, bool *is_empty)
 {
@@ -3421,6 +3449,7 @@ int gsi_is_channel_empty(unsigned long chan_hdl, bool *is_empty)
 
 	return GSI_STATUS_SUCCESS;
 }
+EXPORT_SYMBOL(gsi_is_channel_empty);
 
 int __gsi_get_gci_cookie(struct gsi_chan_ctx *ctx, uint16_t idx)
 {
@@ -3622,6 +3651,7 @@ ring_doorbell:
 
 	return GSI_STATUS_SUCCESS;
 }
+EXPORT_SYMBOL(gsi_queue_xfer);
 
 int gsi_start_xfer(unsigned long chan_hdl)
 {
@@ -3765,7 +3795,7 @@ int gsi_config_channel_mode(unsigned long chan_hdl, enum gsi_chan_mode mode)
 	}
 
 	if (chan_hdl >= gsi_ctx->max_ch) {
-		GSIERR("bad params chan_hdl=%lu mode=%u\n", chan_hdl, mode);
+		GSIDBG("bad params chan_hdl=%lu mode=%u\n", chan_hdl, mode);
 		return -GSI_STATUS_INVALID_PARAMS;
 	}
 
@@ -3789,7 +3819,7 @@ int gsi_config_channel_mode(unsigned long chan_hdl, enum gsi_chan_mode mode)
 		curr = GSI_CHAN_MODE_CALLBACK;
 
 	if (mode == curr) {
-		GSIERR("already in requested mode %u chan_hdl=%lu\n",
+		GSIDBG("already in requested mode %u chan_hdl=%lu\n",
 				curr, chan_hdl);
 		return -GSI_STATUS_UNSUPPORTED_OP;
 	}
@@ -4420,6 +4450,35 @@ void gsi_wdi3_write_evt_ring_db(unsigned long evt_ring_hdl,
 		GSI_EE_n_EV_CH_k_CNTXT_13_OFFS(evt_ring_hdl, gsi_ctx->per.ee));
 }
 EXPORT_SYMBOL(gsi_wdi3_write_evt_ring_db);
+
+int gsi_get_refetch_reg(unsigned long chan_hdl, bool is_rp)
+{
+	if (is_rp) {
+		return gsi_readl(gsi_ctx->base +
+		GSI_EE_n_GSI_CH_k_RE_FETCH_READ_PTR_OFFS(chan_hdl,
+			gsi_ctx->per.ee));
+	} else {
+		return gsi_readl(gsi_ctx->base +
+		GSI_EE_n_GSI_CH_k_RE_FETCH_WRITE_PTR_OFFS(chan_hdl,
+			gsi_ctx->per.ee));
+	}
+}
+EXPORT_SYMBOL(gsi_get_refetch_reg);
+
+int gsi_get_drop_stats(unsigned long ep_id, int scratch_id)
+{
+	/* RTK use scratch 5 */
+	if (scratch_id == 5) {
+		/*
+		 * Read the address of GSI_SHRAM_n (0x1e06000)
+		 * and then add (physical_ch_idx * 12 + 7) in words
+		 */
+		return gsi_readl(gsi_ctx->base +
+		GSI_EE_n_GSI_SHRAM_n_OFFS(ep_id * 12 + 7));
+	}
+	return 0;
+}
+EXPORT_SYMBOL(gsi_get_drop_stats);
 
 void gsi_wdi3_dump_register(unsigned long chan_hdl)
 {

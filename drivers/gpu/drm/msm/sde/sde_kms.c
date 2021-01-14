@@ -1220,6 +1220,7 @@ static void sde_kms_wait_for_commit_done(struct msm_kms *kms,
 		ret = sde_encoder_wait_for_event(encoder, MSM_ENC_COMMIT_DONE);
 		if (ret && ret != -EWOULDBLOCK) {
 			SDE_ERROR("wait for commit done returned %d\n", ret);
+			sde_crtc_request_frame_reset(crtc);
 			break;
 		}
 
@@ -2764,9 +2765,14 @@ retry:
 	}
 
 	crtc_state->active = true;
-	drm_atomic_set_crtc_for_connector(conn_state, enc->crtc);
+	ret = drm_atomic_set_crtc_for_connector(conn_state, enc->crtc);
+	if (ret)
+		pr_err("drm_atomic_set_crtc_for_connector failed!\n");
 
-	drm_atomic_commit(state);
+	ret = drm_atomic_commit(state);
+	if (ret)
+		pr_err("drm_atomic_commit failed!\n");
+
 end:
 	if (state)
 		drm_atomic_state_put(state);

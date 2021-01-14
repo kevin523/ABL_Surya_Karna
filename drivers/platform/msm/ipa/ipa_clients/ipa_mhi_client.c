@@ -20,6 +20,7 @@
 #include <linux/ipa_mhi.h>
 #include "../ipa_common_i.h"
 #include "../ipa_v3/ipa_pm.h"
+#include "../ipa_v3/ipa_i.h"
 
 #define IPA_MHI_DRV_NAME "ipa_mhi_client"
 
@@ -69,6 +70,15 @@
 /* bit #40 in address should be asserted for MHI transfers over pcie */
 #define IPA_MHI_CLIENT_HOST_ADDR_COND(addr) \
 	((ipa_mhi_client_ctx->assert_bit40)?(IPA_MHI_HOST_ADDR(addr)):(addr))
+
+#define IPA_MHI_CLIENT_IP_HW_0_OUT 100
+#define IPA_MHI_CLIENT_IP_HW_0_IN 101
+#define IPA_MHI_CLIENT_ADPL_IN 102
+#define IPA_MHI_CLIENT_IP_HW_QDSS 103
+#define IPA_MHI_CLIENT_IP_HW_1_OUT 105
+#define IPA_MHI_CLIENT_IP_HW_1_IN 106
+#define IPA_MHI_CLIENT_QMAP_FLOW_CTRL_OUT 109
+#define IPA_MHI_CLIENT_QMAP_FLOW_CTRL_IN 110
 
 enum ipa_mhi_rm_state {
 	IPA_MHI_RM_STATE_RELEASED,
@@ -163,25 +173,6 @@ struct ipa_mhi_client_ctx {
 
 static struct ipa_mhi_client_ctx *ipa_mhi_client_ctx;
 static DEFINE_MUTEX(mhi_client_general_mutex);
-
-#ifdef CONFIG_DEBUG_FS
-#define IPA_MHI_MAX_MSG_LEN 512
-static char dbg_buff[IPA_MHI_MAX_MSG_LEN];
-static struct dentry *dent;
-
-static char *ipa_mhi_channel_state_str[] = {
-	__stringify(IPA_HW_MHI_CHANNEL_STATE_DISABLE),
-	__stringify(IPA_HW_MHI_CHANNEL_STATE_ENABLE),
-	__stringify(IPA_HW_MHI_CHANNEL_STATE_RUN),
-	__stringify(IPA_HW_MHI_CHANNEL_STATE_SUSPEND),
-	__stringify(IPA_HW_MHI_CHANNEL_STATE_STOP),
-	__stringify(IPA_HW_MHI_CHANNEL_STATE_ERROR),
-};
-
-#define MHI_CH_STATE_STR(state) \
-	(((state) >= 0 && (state) <= IPA_HW_MHI_CHANNEL_STATE_ERROR) ? \
-	ipa_mhi_channel_state_str[(state)] : \
-	"INVALID")
 
 static int ipa_mhi_set_lock_unlock(bool is_lock)
 {
@@ -278,6 +269,25 @@ fail_dma_enable:
 	dma_free_coherent(pdev, mem.size, mem.base, mem.phys_base);
 	return res;
 }
+
+#ifdef CONFIG_DEBUG_FS
+#define IPA_MHI_MAX_MSG_LEN 512
+static char dbg_buff[IPA_MHI_MAX_MSG_LEN];
+static struct dentry *dent;
+
+static char *ipa_mhi_channel_state_str[] = {
+	__stringify(IPA_HW_MHI_CHANNEL_STATE_DISABLE),
+	__stringify(IPA_HW_MHI_CHANNEL_STATE_ENABLE),
+	__stringify(IPA_HW_MHI_CHANNEL_STATE_RUN),
+	__stringify(IPA_HW_MHI_CHANNEL_STATE_SUSPEND),
+	__stringify(IPA_HW_MHI_CHANNEL_STATE_STOP),
+	__stringify(IPA_HW_MHI_CHANNEL_STATE_ERROR),
+};
+
+#define MHI_CH_STATE_STR(state) \
+	(((state) >= 0 && (state) <= IPA_HW_MHI_CHANNEL_STATE_ERROR) ? \
+	ipa_mhi_channel_state_str[(state)] : \
+	"INVALID")
 
 static int ipa_mhi_print_channel_info(struct ipa_mhi_channel_ctx *channel,
 	char *buff, int len)
@@ -507,6 +517,10 @@ fail:
 	debugfs_remove_recursive(dent);
 }
 
+static void ipa_mhi_debugfs_destroy(void)
+{
+	debugfs_remove_recursive(dent);
+}
 #else
 static void ipa_mhi_debugfs_init(void) {}
 static void ipa_mhi_debugfs_destroy(void) {}
@@ -1507,6 +1521,56 @@ static int ipa_mhi_reset_channel(struct ipa_mhi_channel_ctx *channel,
 	return 0;
 }
 
+static enum ipa_client_type ipa3_mhi_get_client_by_chid(u32 chid)
+{
+	enum ipa_client_type client;
+
+	switch (chid) {
+	case IPA_MHI_CLIENT_ADPL_IN:
+		if (!ipa3_ctx->ipa_in_cpe_cfg)
+			client = IPA_CLIENT_MHI_DPL_CONS;
+		else
+			client = IPA_CLIENT_MAX;
+		break;
+	case IPA_MHI_CLIENT_IP_HW_QDSS:
+		client = IPA_CLIENT_MHI_QDSS_CONS;
+		break;
+	case IPA_MHI_CLIENT_IP_HW_0_OUT:
+		client = IPA_CLIENT_MHI_PROD;
+		break;
+	case IPA_MHI_CLIENT_IP_HW_0_IN:
+		client = IPA_CLIENT_MHI_CONS;
+		break;
+	case IPA_MHI_CLIENT_IP_HW_1_OUT:
+	/* IPA4.5 non-auto, use mhi ch104 for qmap flow control */
+		if (ipa3_ctx->ipa_hw_type == IPA_HW_v4_5)
+			client = IPA_CLIENT_MHI_LOW_LAT_PROD;
+		/* No auto use case in this branch */
+		else
+			client = IPA_CLIENT_MAX;
+		break;
+	case IPA_MHI_CLIENT_IP_HW_1_IN:
+	/* IPA4.5 non-auto, use mhi ch105 for qmap flow control */
+		if (ipa3_ctx->ipa_hw_type == IPA_HW_v4_5)
+			client = IPA_CLIENT_MHI_LOW_LAT_CONS;
+		/* No auto use case in this branch */
+		else
+			client = IPA_CLIENT_MAX;
+		break;
+	case IPA_MHI_CLIENT_QMAP_FLOW_CTRL_OUT:
+		client = IPA_CLIENT_MHI_LOW_LAT_PROD;
+		break;
+	case IPA_MHI_CLIENT_QMAP_FLOW_CTRL_IN:
+		client = IPA_CLIENT_MHI_LOW_LAT_CONS;
+		break;
+	default:
+		IPA_MHI_ERR("Invalid channel = 0x%X\n", chid);
+		client = IPA_CLIENT_MAX;
+	}
+
+	return client;
+}
+
 /**
  * ipa_mhi_connect_pipe() - Connect pipe to IPA and start corresponding
  * MHI channel
@@ -1532,6 +1596,9 @@ int ipa_mhi_connect_pipe(struct ipa_mhi_connect_params *in, u32 *clnt_hdl)
 		return -EINVAL;
 	}
 
+	IPA_MHI_DBG("channel=%d\n", in->channel_id);
+	in->sys.client = ipa3_mhi_get_client_by_chid(in->channel_id);
+
 	if (in->sys.client >= IPA_CLIENT_MAX) {
 		IPA_MHI_ERR("bad param client:%d\n", in->sys.client);
 		return -EINVAL;
@@ -1542,8 +1609,6 @@ int ipa_mhi_connect_pipe(struct ipa_mhi_connect_params *in, u32 *clnt_hdl)
 			"Invalid MHI client, client: %d\n", in->sys.client);
 		return -EINVAL;
 	}
-
-	IPA_MHI_DBG("channel=%d\n", in->channel_id);
 
 	spin_lock_irqsave(&ipa_mhi_client_ctx->state_lock, flags);
 	if (!ipa_mhi_client_ctx ||
@@ -1609,7 +1674,8 @@ int ipa_mhi_connect_pipe(struct ipa_mhi_connect_params *in, u32 *clnt_hdl)
 		internal.start.gsi.mhi = &channel->ch_scratch.mhi;
 		internal.start.gsi.cached_gsi_evt_ring_hdl =
 				&channel->cached_gsi_evt_ring_hdl;
-		internal.start.gsi.evchid = channel->index;
+		internal.start.gsi.evchid = channel->ch_ctx_host.erindex -
+				ipa_mhi_client_ctx->first_er_idx;
 
 		res = ipa_connect_mhi_pipe(&internal, clnt_hdl);
 		if (res) {
@@ -2450,11 +2516,6 @@ int ipa_mhi_destroy_all_channels(void)
 
 	IPA_MHI_FUNC_EXIT();
 	return 0;
-}
-
-static void ipa_mhi_debugfs_destroy(void)
-{
-	debugfs_remove_recursive(dent);
 }
 
 static void ipa_mhi_delete_rm_resources(void)

@@ -1,0 +1,73 @@
+#
+# Support for gcc link time optimization
+#
+
+ifdef CONFIG_LTO_MENU
+	DISABLE_LTO :=
+	LTO_CFLAGS :=
+
+	export DISABLE_LTO
+	export LTO_CFLAGS
+
+	LTO_CFLAGS := -flto $(DISABLE_TL_REORDER)
+	LTO_FINAL_CFLAGS := -fuse-linker-plugin
+
+# would be needed to support < 5.0
+#	LTO_FINAL_CFLAGS += -fno-toplevel-reorder
+
+	LTO_FINAL_CFLAGS += -flto=jobserver
+
+	# don't compile everything twice
+	# requires plugin ar
+	LTO_CFLAGS += -fno-fat-lto-objects
+
+	# Used to disable LTO for specific files (e.g. vdso)
+	DISABLE_LTO := -fno-lto
+
+	# shut up lots of warnings for the compat syscalls
+	LTO_CFLAGS += $(call cc-disable-warning,attribute-alias,)
+
+	LTO_FINAL_CFLAGS += ${LTO_CFLAGS} -fwhole-program
+
+	# most options are passed through implicitely in the LTO
+	# files per function, but not all.
+	# should not pass any that may need to be disabled for
+	# individual files.
+	LTO_FINAL_CFLAGS += $(filter -pg,${KBUILD_CFLAGS})
+	LTO_FINAL_CFLAGS += $(filter -fno-strict-aliasing,${KBUILD_CFLAGS})
+
+ifdef CONFIG_LTO_DEBUG
+	LTO_FINAL_CFLAGS += -fdump-ipa-cgraph -fdump-ipa-inline-details
+	# add for debugging compiler crashes:
+	# LTO_FINAL_CFLAGS += -dH -save-temps
+endif
+ifdef CONFIG_LTO_CP_CLONE
+	LTO_FINAL_CFLAGS += -fipa-cp-clone
+	LTO_CFLAGS += -fipa-cp-clone
+endif
+
+	# Disable some spammy but harmless warnings
+	LTO_LD_WARNINGS += -Wno-lto-type-mismatch -Wno-psabi \
+				 -Wno-stringop-overflow -flinker-output=nolto-rel
+
+	LTO_FINAL_CFLAGS += ${LTO_LD_WARNINGS}
+
+	# Disable some more spammy but harmless warnings
+	LTO_CFLAGS_WARNINGS := $(call cc-disable-warning,attribute-alias,) \
+				 $(call cc-disable-warning, stringop-overflow)
+
+	KBUILD_CFLAGS += ${LTO_CFLAGS} ${LTO_CFLAGS_WARNINGS}
+
+	LDFINAL := ${CONFIG_SHELL} ${srctree}/scripts/gcc-ld \
+                  ${LTO_FINAL_CFLAGS}
+
+	# LTO gcc creates a lot of files in TMPDIR, and with /tmp as tmpfs
+	# it's easy to drive the machine OOM. Use the object directory
+	# instead.
+	TMPDIR ?= $(objtree)
+	export TMPDIR
+
+	# use plugin aware tools
+	AR = $(CROSS_COMPILE)gcc-ar
+	NM = $(CROSS_COMPILE)gcc-nm
+endif

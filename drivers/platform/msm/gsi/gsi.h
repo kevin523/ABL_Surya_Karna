@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -33,7 +33,7 @@
 #define GSI_NO_EVT_ERINDEX 31
 
 #define gsi_readl(c)	(readl(c))
-#define gsi_writel(v, c)	({ __iowmb(); writel_relaxed((v), (c)); })
+#define gsi_writel(v, c)	(writel((v), (c)))
 
 #define GSI_IPC_LOGGING(buf, fmt, args...) \
 	do { \
@@ -234,6 +234,8 @@ struct gsi_ctx {
 	u32 intcntrlr_mem_size;
 	irq_handler_t intcntrlr_gsi_isr;
 	irq_handler_t intcntrlr_client_isr;
+
+	atomic_t num_unclock_irq;
 };
 
 enum gsi_re_type {

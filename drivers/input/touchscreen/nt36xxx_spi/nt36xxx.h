@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2010 - 2018 Novatek, Inc.
- * Copyright (C) 2020 XiaoMi, Inc.
+ *
  * $Revision: 43560 $
  * $Date: 2019-04-19 11:34:19 +0800 (週五, 19 四月 2019) $
  *
@@ -24,21 +24,14 @@
 #include <linux/spi/spi.h>
 #include <linux/uaccess.h>
 #include <linux/regulator/consumer.h>
+#include <linux/pm_qos.h>
+#include <linux/spi/spi-geni-qcom.h>
 
 #ifdef CONFIG_HAS_EARLYSUSPEND
 #include <linux/earlysuspend.h>
 #endif
 
 #include "nt36xxx_mem_map.h"
-
-#ifdef CONFIG_MTK_SPI
-/* Please copy mt_spi.h file under mtk spi driver folder */
-#include "mt_spi.h"
-#endif
-
-#ifdef CONFIG_SPI_MT65XX
-#include <linux/platform_data/spi-mt65xx.h>
-#endif
 
 // include longcheer header
 #include "../lct_tp_info.h"
@@ -50,7 +43,7 @@
 #ifdef CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE
 #include "../xiaomi/xiaomi_touch.h"
 #endif
-#define NVT_DEBUG 1
+#define NVT_DEBUG 0
 
 //---GPIO number---
 #define NVTTOUCH_RST_PIN 87
@@ -68,10 +61,11 @@
 
 #if NVT_DEBUG
 #define NVT_LOG(fmt, args...)    pr_err("[%s] %s %d: " fmt, NVT_SPI_NAME, __func__, __LINE__, ##args)
-#else
-#define NVT_LOG(fmt, args...)    pr_info("[%s] %s %d: " fmt, NVT_SPI_NAME, __func__, __LINE__, ##args)
-#endif
 #define NVT_ERR(fmt, args...)    pr_err("[%s] %s %d: " fmt, NVT_SPI_NAME, __func__, __LINE__, ##args)
+#else
+#define NVT_LOG(fmt, args...)    pr_debug("[%s] %s %d: " fmt, NVT_SPI_NAME, __func__, __LINE__, ##args)
+#define NVT_ERR(fmt, args...)    pr_debug("[%s] %s %d: " fmt, NVT_SPI_NAME, __func__, __LINE__, ##args)
+#endif
 
 //---Input device info.---
 #define NVT_TS_NAME "NVTCapacitiveTouchScreen"
@@ -112,8 +106,8 @@ extern const uint16_t gesture_key_array[];
 //---ESD Protect.---
 #define NVT_TOUCH_ESD_PROTECT 0
 #define NVT_TOUCH_ESD_CHECK_PERIOD 1500	/* ms */
-#define NVT_TOUCH_WDT_RECOVERY 1
-#define NVT_TOUCH_ESD_DISP_RECOVERY 1
+#define NVT_TOUCH_WDT_RECOVERY 0
+#define NVT_TOUCH_ESD_DISP_RECOVERY 0
 
 //enable 'check touch vendor' feature
 #define CHECK_TOUCH_VENDOR
@@ -127,7 +121,7 @@ extern const uint16_t gesture_key_array[];
 /*2019.12.06 longcheer taocheng add for charger mode begin*/
 /*functions description*/
 //enable tp usb plugin feature
-#define NVT_USB_PLUGIN		1
+#define NVT_USB_PLUGIN		0
 
 #if NVT_USB_PLUGIN
 typedef struct touchscreen_usb_plugin_data {
@@ -160,9 +154,11 @@ struct nvt_ts_data {
 	struct delayed_work nvt_fwu_work;
 	uint16_t addr;
 	int8_t phys[32];
+	struct workqueue_struct *coord_workqueue;
 #if defined(CONFIG_FB)
 	struct workqueue_struct *workqueue;
 	struct work_struct resume_work;
+	struct work_struct irq_work;
 #ifdef _MSM_DRM_NOTIFY_H_
 	struct notifier_block drm_notif;
 #else
@@ -208,13 +204,9 @@ struct nvt_ts_data {
 	struct regulator *pwr_lab; /* VSP +5V */
 	struct regulator *pwr_ibb; /* VSN -5V */
 #endif
-#ifdef CONFIG_MTK_SPI
-	struct mt_chip_conf spi_ctrl;
-#endif
-#ifdef CONFIG_SPI_MT65XX
-    struct mtk_chip_config spi_ctrl;
-#endif
 
+	struct pm_qos_request pm_spi_req;
+	struct pm_qos_request pm_touch_req;
 /*2019.12.16 longcheer taocheng add (xiaomi game mode) start*/
 #ifdef CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE
 	u8 palm_sensor_switch;

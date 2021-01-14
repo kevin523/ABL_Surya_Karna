@@ -98,6 +98,9 @@
 #if defined(CONFIG_SYSCTL)
 
 /* External variables not in a header file. */
+#ifdef CONFIG_USB
+extern int deny_new_usb;
+#endif
 extern int suid_dumpable;
 #ifdef CONFIG_COREDUMP
 extern int core_uses_pid;
@@ -305,6 +308,10 @@ static int max_sched_tunable_scaling = SCHED_TUNABLESCALING_END-1;
 #endif /* CONFIG_SMP */
 #endif /* CONFIG_SCHED_DEBUG */
 
+#ifndef CONFIG_SCHED_WALT
+static int sysctl_sched_boost = 0;
+#endif
+
 #ifdef CONFIG_COMPACTION
 static int min_extfrag_threshold;
 static int max_extfrag_threshold = 1000;
@@ -371,24 +378,6 @@ static struct ctl_table kern_table[] = {
 		.extra2		= &three,
 	},
 	{
-		.procname	= "sched_conservative_pl",
-		.data		= &sysctl_sched_conservative_pl,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= &zero,
-		.extra2		= &one,
-	},
-	{
-		.procname	= "sched_many_wakeup_threshold",
-		.data		= &sysctl_sched_many_wakeup_threshold,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= &two,
-		.extra2		= &one_thousand,
-	},
-	{
 		.procname	= "sched_walt_rotate_big_tasks",
 		.data		= &sysctl_sched_walt_rotate_big_tasks,
 		.maxlen		= sizeof(unsigned int),
@@ -424,6 +413,16 @@ static struct ctl_table kern_table[] = {
 		.extra1		= &zero,
 		.extra2		= &two_million,
 	},
+#else
+	{
+		.procname	= "sched_boost",
+		.data		= &sysctl_sched_boost,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= sched_boost_handler,
+		.extra1		= &neg_three,
+		.extra2		= &three,
+	},
 #endif
 	{
 		.procname	= "sched_upmigrate",
@@ -438,6 +437,27 @@ static struct ctl_table kern_table[] = {
 		.maxlen		= sizeof(unsigned int) * MAX_MARGIN_LEVELS,
 		.mode		= 0644,
 		.proc_handler	= sched_updown_migrate_handler,
+	},
+	{
+		.procname	= "sched_migration_cost_ns",
+		.data		= &sysctl_sched_migration_cost,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+	{
+		.procname	= "sched_upmigrate_boosted",
+		.data		= &sysctl_sched_capacity_margin_up_boosted,
+		.maxlen		= sizeof(unsigned int) * MAX_MARGIN_LEVELS,
+		.mode		= 0644,
+		.proc_handler	= sched_updown_migrate_handler_boosted,
+	},
+	{
+		.procname	= "sched_downmigrate_boosted",
+		.data		= &sysctl_sched_capacity_margin_down_boosted,
+		.maxlen		= sizeof(unsigned int) * MAX_MARGIN_LEVELS,
+		.mode		= 0644,
+		.proc_handler	= sched_updown_migrate_handler_boosted,
 	},
 #ifdef CONFIG_SCHED_DEBUG
 	{
@@ -490,13 +510,6 @@ static struct ctl_table kern_table[] = {
 		.proc_handler	= sched_proc_update_handler,
 		.extra1		= &min_sched_tunable_scaling,
 		.extra2		= &max_sched_tunable_scaling,
-	},
-	{
-		.procname	= "sched_migration_cost_ns",
-		.data		= &sysctl_sched_migration_cost,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec,
 	},
 	{
 		.procname	= "sched_nr_migrate",
@@ -613,7 +626,7 @@ static struct ctl_table kern_table[] = {
 		.data		= sched_lib_name,
 		.maxlen		= LIB_PATH_LENGTH,
 		.mode		= 0644,
-		.proc_handler	= proc_dostring,
+		.proc_handler	= sysctl_sched_lib_name_handler,
 	},
 	{
 		.procname	= "sched_lib_mask_force",
@@ -1012,6 +1025,17 @@ static struct ctl_table kern_table[] = {
 		.proc_handler	= proc_dointvec_minmax_sysadmin,
 		.extra1		= &zero,
 		.extra2		= &two,
+	},
+#endif
+#ifdef CONFIG_USB
+	{
+		.procname	= "deny_new_usb",
+		.data		= &deny_new_usb,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax_sysadmin,
+		.extra1		= &zero,
+		.extra2		= &one,
 	},
 #endif
 	{
@@ -1438,13 +1462,6 @@ static struct ctl_table vm_table[] = {
 		.maxlen		= sizeof(sysctl_oom_dump_tasks),
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec,
-	},
-	{
-		.procname       = "reap_mem_on_sigkill",
-		.data           = &sysctl_reap_mem_on_sigkill,
-		.maxlen         = sizeof(sysctl_reap_mem_on_sigkill),
-		.mode           = 0644,
-		.proc_handler   = proc_dointvec,
 	},
 	{
 		.procname	= "overcommit_ratio",
@@ -3384,6 +3401,17 @@ int proc_douintvec_capacity(struct ctl_table *table, int write,
 {
 	return do_proc_dointvec(table, write, buffer, lenp, ppos,
 				do_proc_douintvec_capacity_conv, NULL);
+}
+
+int sched_boost_handler(struct ctl_table *table, int write,
+		void __user *buffer, size_t *lenp,
+		loff_t *ppos)
+{
+	int ret;
+
+	ret = proc_dointvec_minmax(table, write, buffer, lenp, ppos);
+	/* Do nothing :) */
+	return ret;
 }
 
 #else /* CONFIG_PROC_SYSCTL */

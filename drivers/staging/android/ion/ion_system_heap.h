@@ -1,5 +1,5 @@
 /* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+ *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
  * only version 2 as published by the Free Software Foundation.
@@ -25,7 +25,7 @@ static const unsigned int orders[] = {4, 0};
 static const unsigned int orders[] = {0};
 #endif
 
-#define NUM_ORDERS ARRAY_SIZE(orders)
+#define NUM_ORDERS (int)ARRAY_SIZE(orders)
 
 struct ion_system_heap {
 	struct ion_heap heap;

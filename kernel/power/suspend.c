@@ -2,7 +2,7 @@
  * kernel/power/suspend.c - Suspend to RAM and standby functionality.
  *
  * Copyright (c) 2003 Patrick Mochel
- * Copyright (C) 2020 XiaoMi, Inc.
+ * Copyright (c) 2003 Open Source Development Lab
  * Copyright (c) 2009 Rafael J. Wysocki <rjw@sisk.pl>, Novell Inc.
  *
  * This file is released under the GPLv2.
@@ -50,7 +50,7 @@ static const char * const mem_sleep_labels[] = {
 const char *mem_sleep_states[PM_SUSPEND_MAX];
 
 suspend_state_t mem_sleep_current = PM_SUSPEND_TO_IDLE;
-suspend_state_t mem_sleep_default = PM_SUSPEND_MAX;
+suspend_state_t mem_sleep_default = PM_SUSPEND_TO_IDLE;
 suspend_state_t pm_suspend_target_state;
 EXPORT_SYMBOL_GPL(pm_suspend_target_state);
 
@@ -114,6 +114,7 @@ static void s2idle_loop(void)
 
 	for (;;) {
 		int error;
+		bool leave_s2idle = false;
 
 		dpm_noirq_begin();
 
@@ -127,10 +128,27 @@ static void s2idle_loop(void)
 		 * so prevent them from terminating the loop right away.
 		 */
 		error = dpm_noirq_suspend_devices(PMSG_SUSPEND);
-		if (!error)
+		if (!error) {
 			s2idle_enter();
-		else if (error == -EBUSY && pm_wakeup_pending())
+			/*
+			 * Once we enter s2idle_enter(), returning means that
+			 * either:
+			 * 1) an abort was detected prior to suspending, or
+			 * 2) something caused us to wake from suspended
+			 * If we got an abort or a wakeup interrupt, we need
+			 * to break out of this loop.  If we were woken by
+			 * an interrupt that technically doesn't require a
+			 * full wakeup (only a few corner cases), we're going
+			 * to wake up anyway, because the way this new
+			 * s2idle_loop() flow works, the resume of devices
+			 * below will cause an abort even if we could
+			 * otherwise have looped back into suspend.
+			 */
+			leave_s2idle = true;
+		} else if (error == -EBUSY && pm_wakeup_pending()) {
+			leave_s2idle = true;
 			error = 0;
+		}
 
 		if (!error && s2idle_ops && s2idle_ops->wake)
 			s2idle_ops->wake();
@@ -145,10 +163,17 @@ static void s2idle_loop(void)
 		if (s2idle_ops && s2idle_ops->sync)
 			s2idle_ops->sync();
 
-		if (pm_wakeup_pending())
+		if (leave_s2idle || pm_wakeup_pending())
 			break;
 
+		/*
+		 * Since we are going to loop around and attempt to go back
+		 * into suspend, ensure that all wakeup reason logging from
+		 * this partial resume gets cleared first (which will also
+		 * reenable wakeup reason logging).
+		 */
 		pm_wakeup_clear(false);
+		clear_wakeup_reasons();
 	}
 
 	pm_pr_dbg("resume from suspend-to-idle\n");
@@ -382,10 +407,6 @@ void __weak arch_suspend_enable_irqs(void)
 	local_irq_enable();
 }
 
-//2020.04.27 add longcheer fengxingqiang "Increase the hibernation info of the rpmh subsystem"
-extern void system_sleep_status_print_enabled(void);
-extern void rpmh_status_print_enabled(void);
-
 /**
  * suspend_enter - Make the system enter the given sleep state.
  * @state: System sleep state to enter.
@@ -438,13 +459,10 @@ static int suspend_enter(suspend_state_t state, bool *wakeup)
 
 	error = disable_nonboot_cpus();
 	if (error || suspend_test(TEST_CPUS)) {
-		log_suspend_abort_reason("Disabling non-boot cpus failed");
+		//log_suspend_abort_reason("Disabling non-boot cpus failed");
 		goto Enable_cpus;
 	}
 
-//2020.04.27 add longcheer fengxingqiang "Increase the hibernation info of the rpmh subsystem"
-	rpmh_status_print_enabled();
-	system_sleep_status_print_enabled();
 	arch_suspend_disable_irqs();
 	BUG_ON(!irqs_disabled());
 
@@ -463,6 +481,8 @@ static int suspend_enter(suspend_state_t state, bool *wakeup)
 			log_suspend_abort_reason(suspend_abort);
 			error = -EBUSY;
 		}
+
+		start_logging_wakeup_reasons();
 		syscore_resume();
 	}
 
@@ -493,7 +513,7 @@ static int suspend_enter(suspend_state_t state, bool *wakeup)
  */
 int suspend_devices_and_enter(suspend_state_t state)
 {
-	int error;
+	int error, last_dev;
 	bool wakeup = false;
 
 	if (!sleep_state_supported(state))
@@ -509,8 +529,11 @@ int suspend_devices_and_enter(suspend_state_t state)
 	suspend_test_start();
 	error = dpm_suspend_start(PMSG_SUSPEND);
 	if (error) {
+		last_dev = suspend_stats.last_failed_dev + REC_FAILED_NUM - 1;
+		last_dev %= REC_FAILED_NUM;
 		pr_err("Some devices failed to suspend, or early wake event detected\n");
-		log_suspend_abort_reason("Some devices failed to suspend, or early wake event detected");
+		log_suspend_abort_reason("%s device failed to suspend, or early wake event detected",
+			suspend_stats.failed_devs[last_dev]);
 		goto Recover_platform;
 	}
 	suspend_test_finish("suspend devices");
@@ -620,7 +643,7 @@ static void pm_suspend_marker(char *annotation)
 
 	getnstimeofday(&ts);
 	rtc_time_to_tm(ts.tv_sec, &tm);
-	pr_info("PM: suspend %s %d-%02d-%02d %02d:%02d:%02d.%09lu UTC\n",
+	pr_debug("PM: suspend %s %d-%02d-%02d %02d:%02d:%02d.%09lu UTC\n",
 		annotation, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
 		tm.tm_hour, tm.tm_min, tm.tm_sec, ts.tv_nsec);
 }
@@ -640,7 +663,7 @@ int pm_suspend(suspend_state_t state)
 		return -EINVAL;
 
 	pm_suspend_marker("entry");
-	pr_info("suspend entry (%s)\n", mem_sleep_labels[state]);
+	pr_debug("suspend entry (%s)\n", mem_sleep_labels[state]);
 	error = enter_state(state);
 	if (error) {
 		suspend_stats.fail++;
@@ -649,7 +672,7 @@ int pm_suspend(suspend_state_t state)
 		suspend_stats.success++;
 	}
 	pm_suspend_marker("exit");
-	pr_info("suspend exit\n");
+	pr_debug("suspend exit\n");
 	measure_wake_up_time();
 	return error;
 }

@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
- * Copyright (C) 2020 XiaoMi, Inc.
+ *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
  * only version 2 as published by the Free Software Foundation.
@@ -25,10 +25,6 @@
 #include "dsi_ctrl_hw.h"
 #include "dsi_parser.h"
 
-#ifdef CONFIG_KLAPSE
-#include <linux/klapse.h>
-#endif
-
 /**
  * topology is currently defined by a set of following 3 values:
  * 1. num of layer mixers
@@ -49,7 +45,6 @@
 #define DEFAULT_PANEL_PREFILL_LINES	25
 #define TICKS_IN_MICRO_SECOND		1000000
 
-extern void lcd_esd_enable(bool on);
 extern char g_lcd_id_mi[64];
 
 static int panel_disp_param_send_lock(struct dsi_panel *panel, int param);
@@ -735,10 +730,6 @@ int dsi_panel_set_backlight(struct dsi_panel *panel, u32 bl_lvl)
 		pr_err("Backlight type(%d) not supported\n", bl->type);
 		rc = -ENOTSUPP;
 	}
-	
-#ifdef CONFIG_KLAPSE
-	set_rgb_slider(bl_lvl);
-#endif
 
 	return rc;
 }
@@ -1374,7 +1365,6 @@ static int dsi_panel_parse_dyn_clk_caps(struct dsi_panel *panel)
 	struct dsi_dyn_clk_caps *dyn_clk_caps = &panel->dyn_clk_caps;
 	struct dsi_parser_utils *utils = &panel->utils;
 	const char *name = panel->name;
-	const char *type = NULL;
 
 	supported = utils->read_bool(utils->data, "qcom,dsi-dyn-clk-enable");
 
@@ -1414,25 +1404,6 @@ static int dsi_panel_parse_dyn_clk_caps(struct dsi_panel *panel)
 
 	dyn_clk_caps->dyn_clk_support = true;
 
-	type = utils->get_property(utils->data,
-				   "qcom,dsi-dyn-clk-type", NULL);
-	if (!type) {
-		dyn_clk_caps->type = DSI_DYN_CLK_TYPE_LEGACY;
-		dyn_clk_caps->maintain_const_fps = false;
-		return 0;
-	}
-
-	if (!strcmp(type, "constant-fps-adjust-hfp")) {
-		dyn_clk_caps->type = DSI_DYN_CLK_TYPE_CONST_FPS_ADJUST_HFP;
-		dyn_clk_caps->maintain_const_fps = true;
-	} else if (!strcmp(type, "constant-fps-adjust-vfp")) {
-		dyn_clk_caps->type = DSI_DYN_CLK_TYPE_CONST_FPS_ADJUST_VFP;
-		dyn_clk_caps->maintain_const_fps = true;
-	} else {
-		dyn_clk_caps->type = DSI_DYN_CLK_TYPE_LEGACY;
-		dyn_clk_caps->maintain_const_fps = false;
-	}
-	pr_debug("Dynamic clock type is %d\n", dyn_clk_caps->type);
 	return 0;
 }
 
@@ -1655,7 +1626,6 @@ static int dsi_panel_parse_panel_mode(struct dsi_panel *panel)
 {
 	int rc = 0;
 	struct dsi_parser_utils *utils = &panel->utils;
-	bool panel_mode_switch_enabled;
 	enum dsi_op_mode panel_mode;
 	const char *mode;
 
@@ -1674,12 +1644,7 @@ static int dsi_panel_parse_panel_mode(struct dsi_panel *panel)
 		goto error;
 	}
 
-	panel_mode_switch_enabled = utils->read_bool(utils->data,
-			"qcom,mdss-dsi-panel-mode-switch");
-	pr_info("%s: panel operating mode switch feature %s\n", __func__,
-		(panel_mode_switch_enabled ? "enabled" : "disabled"));
-
-	if (panel_mode == DSI_OP_VIDEO_MODE || panel_mode_switch_enabled) {
+	if (panel_mode == DSI_OP_VIDEO_MODE) {
 		rc = dsi_panel_parse_video_host_config(&panel->video_config,
 						       utils,
 						       panel->name);
@@ -1690,7 +1655,7 @@ static int dsi_panel_parse_panel_mode(struct dsi_panel *panel)
 		}
 	}
 
-	if (panel_mode == DSI_OP_CMD_MODE || panel_mode_switch_enabled) {
+	if (panel_mode == DSI_OP_CMD_MODE) {
 		rc = dsi_panel_parse_cmd_host_config(&panel->cmd_config,
 						     utils,
 						     panel->name);
@@ -1702,7 +1667,6 @@ static int dsi_panel_parse_panel_mode(struct dsi_panel *panel)
 	}
 
 	panel->panel_mode = panel_mode;
-	panel->panel_mode_switch_enabled = panel_mode_switch_enabled;
 error:
 	return rc;
 }
@@ -2192,7 +2156,8 @@ static int dsi_panel_parse_misc_features(struct dsi_panel *panel)
 {
 	struct dsi_parser_utils *utils = &panel->utils;
 
-	panel->ulps_feature_enabled = true;
+	panel->ulps_feature_enabled =
+		utils->read_bool(utils->data, "qcom,ulps-enabled");
 
 	pr_info("%s: ulps feature %s\n", __func__,
 		(panel->ulps_feature_enabled ? "enabled" : "disabled"));
@@ -3084,31 +3049,6 @@ static int dsi_panel_parse_partial_update_caps(struct dsi_display_mode *mode,
 	return rc;
 }
 
-static int dsi_panel_parse_panel_mode_caps(struct dsi_display_mode *mode,
-			struct dsi_parser_utils *utils)
-{
-	bool vid_mode_support, cmd_mode_support;
-
-	if (!mode || !mode->priv_info) {
-		pr_err("invalid arguments\n");
-		return -EINVAL;
-	}
-
-	vid_mode_support = utils->read_bool(utils->data,
-				"qcom,mdss-dsi-video-mode");
-	cmd_mode_support = utils->read_bool(utils->data,
-				"qcom,mdss-dsi-cmd-mode");
-
-	if (cmd_mode_support)
-		mode->panel_mode = DSI_OP_CMD_MODE;
-	else if (vid_mode_support)
-		mode->panel_mode = DSI_OP_VIDEO_MODE;
-	else
-		return -EINVAL;
-
-	return 0;
-};
-
 static int dsi_panel_parse_dms_info(struct dsi_panel *panel)
 {
 	int dms_enabled;
@@ -3326,27 +3266,6 @@ static int dsi_panel_parse_esd_config(struct dsi_panel *panel)
 
 	esd_config = &panel->esd_config;
 	esd_config->status_mode = ESD_MODE_MAX;
-
-	/* esd-err-flag method will be prefered */
-	esd_config->esd_err_irq_gpio = of_get_named_gpio(panel->panel_of_node, "qcom,esd-err-int-gpio", 0);
-	esd_config->esd_err_irq_flags = IRQF_TRIGGER_FALLING | IRQF_ONESHOT;
-
-	if (gpio_is_valid(esd_config->esd_err_irq_gpio)) {
-		pr_info("esd irq gpio is valid\n");
-		esd_config->esd_err_irq = gpio_to_irq(esd_config->esd_err_irq_gpio);
-		rc = gpio_request(esd_config->esd_err_irq_gpio, "esd_err_int_gpio");
-		if (rc)
-			pr_err("%s: Failed to get esd irq GPIO%d (rc = %d)",
-					__func__, esd_config->esd_err_irq_gpio, rc);
-		else {
-			pr_err("%s: Succeed to get esd irq GPIO%d (rc = %d)",
-					__func__, esd_config->esd_err_irq_gpio, rc);
-			gpio_direction_input(esd_config->esd_err_irq_gpio);
-		}
-
-		return 0;
-	}
-
 	esd_config->esd_enabled = utils->read_bool(utils->data,
 		"qcom,esd-check-enabled");
 
@@ -3804,11 +3723,8 @@ int dsi_panel_get_mode_count(struct dsi_panel *panel)
 {
 	const u32 SINGLE_MODE_SUPPORT = 1;
 	struct dsi_parser_utils *utils;
-	struct device_node *timings_np, *child_np;
-	int num_dfps_rates, num_bit_clks;
-	int num_video_modes = 0, num_cmd_modes = 0;
+	struct device_node *timings_np;
 	int count, rc = 0;
-	void *utils_data = NULL;
 
 	if (!panel) {
 		pr_err("invalid params\n");
@@ -3835,37 +3751,12 @@ int dsi_panel_get_mode_count(struct dsi_panel *panel)
 		goto error;
 	}
 
-	/* No multiresolution support is available for video mode panels.
-	 * Multi-mode is supported for video mode during POMS is enabled.
-	 */
+	/* No multiresolution support is available for video mode panels */
 	if (panel->panel_mode != DSI_OP_CMD_MODE &&
-		!panel->host_config.ext_bridge_num &&
-		!panel->panel_mode_switch_enabled)
+		!panel->host_config.ext_bridge_num)
 		count = SINGLE_MODE_SUPPORT;
 
 	panel->num_timing_nodes = count;
-	dsi_for_each_child_node(timings_np, child_np) {
-		utils_data = child_np;
-		if (utils->read_bool(utils->data, "qcom,mdss-dsi-video-mode"))
-			num_video_modes++;
-		else if (utils->read_bool(utils->data,
-					"qcom,mdss-dsi-cmd-mode"))
-			num_cmd_modes++;
-		else if (panel->panel_mode == DSI_OP_VIDEO_MODE)
-			num_video_modes++;
-		else if (panel->panel_mode == DSI_OP_CMD_MODE)
-			num_cmd_modes++;
-	}
-
-	num_dfps_rates = !panel->dfps_caps.dfps_support ? 1 :
-					panel->dfps_caps.dfps_list_len;
-
-	num_bit_clks = !panel->dyn_clk_caps.dyn_clk_support ? 1 :
-					panel->dyn_clk_caps.bit_clk_list_len;
-
-	/* Inflate num_of_modes by fps and bit clks in dfps */
-	panel->num_display_modes = (num_cmd_modes * num_bit_clks) +
-			(num_video_modes * num_bit_clks * num_dfps_rates);
 
 error:
 	return rc;
@@ -4014,17 +3905,6 @@ int dsi_panel_get_mode(struct dsi_panel *panel,
 		 */
 		if (prv_info->dsc_enabled || prv_info->roi_caps.enabled)
 			prv_info->overlap_pixels = 0;
-
-		if (panel->panel_mode_switch_enabled) {
-			rc = dsi_panel_parse_panel_mode_caps(mode, utils);
-			if (rc) {
-				pr_err("PMS: failed to parse panel mode\n");
-				rc = 0;
-				mode->panel_mode = panel->panel_mode;
-			}
-		} else {
-			mode->panel_mode = panel->panel_mode;
-		}
 	}
 	goto done;
 
@@ -4767,6 +4647,7 @@ int panel_disp_param_send(struct dsi_display *display, int param_type)
 		return rc;
 
 	rc = panel_disp_param_send_lock(panel, param_type);
+
 	return rc;
 }
 
@@ -4828,9 +4709,6 @@ int dsi_panel_enable(struct dsi_panel *panel)
 	else
 		panel->panel_initialized = true;
 	mutex_unlock(&panel->panel_lock);
-
-	lcd_esd_enable(1);
-
 	return rc;
 }
 
@@ -4902,8 +4780,6 @@ int dsi_panel_disable(struct dsi_panel *panel)
 			dsi_pwr_panel_regulator_mode_set(&panel->power_info,
 				"ibb", REGULATOR_MODE_STANDBY);
 
-		lcd_esd_enable(0);
-
 		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_OFF);
 		if (rc) {
 			/*
@@ -4974,21 +4850,21 @@ int dsi_panel_set_feature(struct dsi_panel *panel, enum dsi_cmd_set_type type)
 		int rc = 0;
 
 		if (!panel) {
-			pr_err("Invalid params\n");
-			return -EINVAL;
+				pr_err("Invalid params\n");
+				return -EINVAL;
 		}
 		pr_info("xinj:%s panel_initialized=%d type=%d\n", __func__, panel->panel_initialized, type);
 		if (!panel->panel_initialized) {
-			pr_err("xinj: con't set cmds type=%d\n", type);
-			return -EINVAL;
+				pr_err("xinj: con't set cmds type=%d\n", type);
+				return -EINVAL;
 		}
 
 		mutex_lock(&panel->panel_lock);
 
 		rc = dsi_panel_tx_cmd_set(panel, type);
 		if (rc) {
-			pr_err("[%s] failed to send DSI_CMD_SET_FEATURE_ON/OFF cmds, rc=%d,type=%d\n",
-					panel->name, rc, type);
+				pr_err("[%s] failed to send DSI_CMD_SET_FEATURE_ON/OFF cmds, rc=%d,type=%d\n",
+						panel->name, rc, type);
 		}
 		mutex_unlock(&panel->panel_lock);
 		return rc;

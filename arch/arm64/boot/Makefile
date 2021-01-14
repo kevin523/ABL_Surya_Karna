@@ -18,7 +18,7 @@ include $(srctree)/arch/arm64/boot/dts/Makefile
 
 OBJCOPYFLAGS_Image :=-O binary -R .note -R .note.gnu.build-id -R .comment -S
 
-targets := Image Image.bz2 Image.gz Image.lz4 Image.lzma Image.lzo dtbo.img
+targets := Image Image.bz2 Image.gz Image.lz4 Image.lzma Image.lzo
 
 DTB_NAMES := $(subst $\",,$(CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE_NAMES))
 ifneq ($(DTB_NAMES),)
@@ -27,7 +27,8 @@ else
 DTB_LIST := $(dtb-y)
 endif
 DTB_OBJS := $(shell find $(obj)/dts/ -name \*.dtb)
-DTBO_OBJS := $(shell find $(obj)/dts/ -name \*.dtbo)
+
+DTBO_OBJS := $(shell find -L $(obj)/dts/ -name \*.dtbo)
 
 # Add RTIC DTB to the DTB list if RTIC MPGen is enabled
 # Note, we keep this for compatibility with
@@ -54,6 +55,11 @@ $(obj)/Image-dtb-hdr: $(obj)/Image FORCE
 $(obj)/Image-dtb: $(obj)/Image-dtb-hdr $(obj)/Image $(DTB_OBJS) FORCE
 	$(call if_changed,cat)
 
+quiet_cmd_overlay = OVERLAY $@
+      cmd_overlay = PATH=$(srctree)/scripts/ufdt/libufdt/utils/src:$(objtree)/scripts/dtc-aosp:$(objtree)/scripts/ufdt:$(PATH) $(srctree)/$(src)/overlay.sh $@ $^ > /dev/null
+$(obj)/../kernel/embedded-dtb.c: $(obj)/dtbo.img $(DTB_OBJS) FORCE
+	$(call if_changed,overlay)
+
 $(obj)/Image.gz: $(obj)/Image FORCE
 	$(call if_changed,gzip)
 
@@ -69,8 +75,9 @@ $(obj)/Image.lzo: $(obj)/Image FORCE
 $(obj)/Image.gz-dtb: $(obj)/Image.gz $(DTB_OBJS) FORCE
 	$(call if_changed,cat)
 
-$(obj)/dtbo.img: $(DTBO_OBJS) FORCE
-	$(call if_changed,mkdtimg)
+
+$(obj)/dtbo.img: $(obj)/dts/dtboimg.cfg $(DTBO_OBJS) FORCE
+	$(call if_changed,mkdtimg,4096) # align dtbo.img to 4kB
 
 install:
 	$(CONFIG_SHELL) $(srctree)/$(src)/install.sh $(KERNELRELEASE) \

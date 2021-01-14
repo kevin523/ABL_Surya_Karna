@@ -107,6 +107,12 @@ KBUILD_AFLAGS	+= $(lseinstr) $(brokengasinst) $(vdso32)
 KBUILD_CFLAGS	+= $(call cc-option,-mabi=lp64)
 KBUILD_AFLAGS	+= $(call cc-option,-mabi=lp64)
 
+ifeq ($(cc-name),clang)
+KBUILD_CFLAGS	+= -DCONFIG_ARCH_SUPPORTS_INT128
+else
+KBUILD_CFLAGS	+= $(call cc-ifversion, -ge, 0500, -DCONFIG_ARCH_SUPPORTS_INT128)
+endif
+
 ifeq ($(CONFIG_SHADOW_CALL_STACK), y)
 KBUILD_CFLAGS	+= -ffixed-x18
 endif
@@ -116,10 +122,12 @@ KBUILD_CPPFLAGS	+= -mbig-endian
 CHECKFLAGS	+= -D__AARCH64EB__
 AS		+= -EB
 LD		+= -EB
+ifeq ($(cc-name),clang)
 ifeq ($(ld-name),gold)
 LDFLAGS		+= -maarch64_elf64_be_vec
 else
 LDFLAGS		+= -maarch64linuxb
+endif
 endif
 UTS_MACHINE	:= aarch64_be
 else
@@ -127,10 +135,12 @@ KBUILD_CPPFLAGS	+= -mlittle-endian
 CHECKFLAGS	+= -D__AARCH64EL__
 AS		+= -EL
 LD		+= -EL
+ifeq ($(cc-name),clang)
 ifeq ($(ld-name),gold)
 LDFLAGS		+= -maarch64_elf64_le_vec
 else
 LDFLAGS		+= -maarch64linux
+endif
 endif
 UTS_MACHINE	:= aarch64
 endif
@@ -225,6 +235,12 @@ PHONY += dtbs dtbs_install
 dtbs: prepare scripts
 	$(Q)$(MAKE) $(build)=$(boot)/dts
 
+ifeq ($(CONFIG_BUILD_ARM64_EMBEDDED_DTB),y)
+$(obj)/kernel/embedded-dtb.c: dtbs dtbo.img
+	$(Q)$(MAKE) $(build)=$(boot) $(obj)/arch/arm64/boot/../kernel/embedded-dtb.c
+arch/arm64/kernel: $(obj)/kernel/embedded-dtb.c
+endif
+
 dtbs_install:
 	$(Q)$(MAKE) $(dtbinst)=$(boot)/dts
 
@@ -234,12 +250,8 @@ Image-dtb: vmlinux scripts dtbs
 Image.gz-dtb: vmlinux scripts dtbs Image.gz
 	$(Q)$(MAKE) $(build)=$(boot) $(boot)/$@
 
-ifeq ($(CONFIG_BUILD_ARM64_DT_OVERLAY),y)
-$(KBUILD_DTBO_IMG): dtbs
+dtbo.img: $(boot)/dts/dtboimg.cfg dtbs
 	$(Q)$(MAKE) $(build)=$(boot) $(boot)/$@
-
-all: $(KBUILD_DTBO_IMG)
-endif
 
 PHONY += vdso_install
 vdso_install:
@@ -249,6 +261,9 @@ vdso_install:
 archclean:
 	$(Q)$(MAKE) $(clean)=$(boot)
 	$(Q)$(MAKE) $(clean)=$(boot)/dts
+
+CLEAN_FILES += $(boot)/Image $(boot)/Image-dtb $(boot)/Image.* $(boot)/dtbo.img
+MRPROPER_FILES += $(boot)/Image $(boot)/Image-dtb $(boot)/Image.* $(boot)/dtbo.img
 
 ifeq ($(KBUILD_EXTMOD),)
 # We need to generate vdso-offsets.h before compiling certain files in kernel/.

@@ -89,8 +89,8 @@ _kgsl_pool_add_page(struct kgsl_page_pool *pool, struct page *p)
 	list_add_tail(&p->lru, &pool->page_list);
 	pool->page_count++;
 	spin_unlock(&pool->list_lock);
-	mod_node_page_state(page_pgdat(p), NR_INDIRECTLY_RECLAIMABLE_BYTES,
-				(PAGE_SIZE << pool->pool_order));
+	mod_node_page_state(page_pgdat(p), NR_KERNEL_MISC_RECLAIMABLE,
+				pool->pool_order);
 }
 
 /* Returns a page from specified pool */
@@ -109,8 +109,8 @@ _kgsl_pool_get_page(struct kgsl_page_pool *pool)
 
 	if (p != NULL)
 		mod_node_page_state(page_pgdat(p),
-				NR_INDIRECTLY_RECLAIMABLE_BYTES,
-				-(PAGE_SIZE << pool->pool_order));
+				NR_KERNEL_MISC_RECLAIMABLE,
+				-pool->pool_order);
 	return p;
 }
 
@@ -265,11 +265,19 @@ void kgsl_pool_free_pages(struct page **pages, unsigned int pcount)
 	if (pages == NULL || pcount == 0)
 		return;
 
+	if (WARN(!kern_addr_valid((unsigned long)pages),
+		"Address of pages=%pK is not valid\n", pages))
+		return;
+
 	for (i = 0; i < pcount;) {
 		/*
 		 * Free each page or compound page group individually.
 		 */
 		struct page *p = pages[i];
+
+		if (WARN(!kern_addr_valid((unsigned long)p),
+			"Address of page=%pK is not valid\n", p))
+			return;
 
 		i += 1 << compound_order(p);
 		kgsl_pool_free_page(p);
@@ -478,12 +486,16 @@ kgsl_pool_shrink_scan_objects(struct shrinker *shrinker,
 	/* nr represents number of pages to be removed*/
 	int nr = sc->nr_to_scan;
 	int total_pages = kgsl_pool_size_total();
+	unsigned long ret;
 
 	/* Target pages represents new  pool size */
 	int target_pages = (nr > total_pages) ? 0 : (total_pages - nr);
 
 	/* Reduce pool size to target_pages */
-	return kgsl_pool_reduce(target_pages, false);
+	ret = kgsl_pool_reduce(target_pages, false);
+
+	/* If we are unable to shrink more, stop trying */
+	return (ret == 0) ? SHRINK_STOP : ret;
 }
 
 static unsigned long
