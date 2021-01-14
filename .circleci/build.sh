@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 echo "Cloning dependencies"
-git clone --depth=1 https://github.com/RooGhz720/Compiler-LLVM  clang
+git clone --depth=1 https://github.com/NusantaraDevs/DragonTC -b 10.0 $clangDir DragonTC
 git clone https://github.com/RooGhz720/Compiler-LLVM -b gcc64 --depth=1 gcc
 git clone https://github.com/RooGhz720/Compiler-LLVM -b gcc32  --depth=1 gcc32
 git clone --depth=1 https://github.com/RooGhz720/Anykernel3 AnyKernel
@@ -12,8 +12,8 @@ KERNEL_DIR=$(pwd)
 PATH="${KERNEL_DIR}/clang/bin:${KERNEL_DIR}/gcc/bin:${KERNEL_DIR}/gcc32/bin:${PATH}"
 export KBUILD_COMPILER_STRING="$(${KERNEL_DIR}/clang/bin/clang --version | head -n 1 | perl -pe 's/\(http.*?\)//gs' | sed -e 's/  */ /g')"
 export ARCH=arm64
-export KBUILD_BUILD_HOST=circleci
-export KBUILD_BUILD_USER="RooGhz"
+export KBUILD_BUILD_HOST=MyLabs
+export KBUILD_BUILD_USER="Aghisna"
 # sticker plox
 function sticker() {
     curl -s -X POST "https://api.telegram.org/bot$token/sendSticker" \
